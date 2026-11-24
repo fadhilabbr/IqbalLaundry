@@ -1,36 +1,45 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ✦ Iqbal Laundry
 
-## Getting Started
+Aplikasi web **Iqbal Laundry** dibangun menggunakan **Next.js 16 (App Router + Turbopack)**, **React 19**, **TypeScript**, dan **Tailwind CSS v4**. Aplikasi ini menyediakan alur pemesanan laundry antar-jemput, pelacakan status real-time, portal member, portal kurir, dan panel admin dengan persistensi data lokal (`localStorage`).
 
-First, run the development server:
+## Rute Halaman
+
+| Rute | Deskripsi |
+| :--- | :--- |
+| `/dashboard` | Portal Pelanggan Tamu — pemesanan 5 tahap (Pilih Layanan → Data Pesanan → Alamat & Estimasi → Pembayaran QRIS/Transfer/COD → Lacak Status 5 Tahap). |
+| `/member` | Portal Member — login & registrasi member, riwayat transaksi, unduh ringkasan invoice, voucher promo (`WELCOME10`, `HEMAT5`), dan poin loyalitas. |
+| `/kurir` | Portal Kurir — jadwal jemput & antar, detail tugas & kontak pelanggan, pratinjau rute, dan konfirmasi berat timbangan aktual. |
+| `/admin` | Admin Panel — kelola order masuk & status real-time, CRUD katalog layanan & tarif, pengaturan tarif ongkos kirim per zona, dan laporan performa usaha. |
+| `/login` | Halaman Login multi-peran dilengkapi pengisian cepat kredensial akun dummy dan pengalihan otomatis sesuai peran. |
+| `/` | Mengarahkan otomatis ke `/dashboard`. |
+
+## Kredensial Akun Dummy
+
+| Role | Username / No. WA | Password | Rute Tujuan |
+| :--- | :--- | :--- | :--- |
+| **Admin** | `admin` / `081200000001` | `admin123` | `/admin` |
+| **Kurir** | `kurir` / `081200000002` | `kurir123` | `/kurir` |
+| **Member** | `member` / `081234567890` | `member123` | `/member` |
+
+## Menjalankan Secara Lokal
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Buka [http://localhost:3000](http://localhost:3000) di browser Anda.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Perintah Produksi & Quality Check
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run lint
+npm run build
+npm run start
+```
 
-## Learn More
+## Deploy ke Vercel
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+1. Push repositori ini ke GitHub/GitLab/Bitbucket.
+2. Impor proyek di [Vercel Dashboard](https://vercel.com/new).
+3. Preset framework akan terdeteksi otomatis sebagai **Next.js** dengan perintah build `npm run build` — klik **Deploy**.
