@@ -43,3 +43,7 @@ npm run start
 1. Push repositori ini ke GitHub/GitLab/Bitbucket.
 2. Impor proyek di [Vercel Dashboard](https://vercel.com/new).
 3. Preset framework akan terdeteksi otomatis sebagai **Next.js** dengan perintah build `npm run build` — klik **Deploy**.
+
+## Dokumentasi API
+
+Spesifikasi lengkap draft kontrak API untuk integrasi dan diskusi dengan tim Backend tersedia di [API_CONTRACT.md](./API_CONTRACT.md).

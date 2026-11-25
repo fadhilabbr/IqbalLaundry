@@ -23,17 +23,55 @@ import {
   initialDeliveryZones,
   initialReportStats,
 } from '@/lib/data';
-import { UserAccount, DUMMY_ACCOUNTS, findUserByCredentials } from '@/lib/auth';
+import { PublicUserAccount, DUMMY_ACCOUNTS } from '@/lib/auth';
 
 const STORAGE_KEY = 'iqbal_laundry_v1';
 
 interface PersistedState {
-  role: Role;
-  currentUser: UserAccount | null;
   services: Service[];
   orders: Order[];
   courierTasks: CourierTask[];
   deliveryZones: DeliveryZone[];
+}
+
+export interface AuthActionResult {
+  success: boolean;
+  error?: string;
+  user?: PublicUserAccount;
+}
+
+interface SessionResponse {
+  authenticated: boolean;
+  role: Role;
+  user: PublicUserAccount | null;
+}
+
+interface LoginResponse {
+  success: boolean;
+  error?: string;
+  user?: PublicUserAccount;
+}
+
+function sanitizePublicUser(raw: unknown): PublicUserAccount | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const candidate = raw as Partial<PublicUserAccount>;
+  if (
+    typeof candidate.username !== 'string' ||
+    typeof candidate.name !== 'string' ||
+    typeof candidate.role !== 'string' ||
+    typeof candidate.roleLabel !== 'string' ||
+    typeof candidate.description !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    username: candidate.username,
+    phone: typeof candidate.phone === 'string' ? candidate.phone : undefined,
+    name: candidate.name,
+    role: candidate.role,
+    roleLabel: candidate.roleLabel,
+    description: candidate.description,
+  };
 }
 
 interface AppContextType {
@@ -41,10 +79,11 @@ interface AppContextType {
   setRole: (role: Role) => void;
 
   // Auth User
-  currentUser: UserAccount | null;
-  login: (identity: string, password: string) => { success: boolean; error?: string };
-  logout: () => void;
-  loginAsDemo: (targetRole: Role) => void;
+  currentUser: PublicUserAccount | null;
+  authReady: boolean;
+  login: (identity: string, password: string, rememberMe?: boolean) => Promise<AuthActionResult>;
+  logout: () => Promise<void>;
+  loginAsDemo: (targetRole: Role) => Promise<AuthActionResult>;
 
   // Toasts
   toasts: ToastMessage[];
@@ -101,7 +140,8 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [role, setRole] = useState<Role>('PELANGGAN_TAMU');
-  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
+  const [currentUser, setCurrentUser] = useState<PublicUserAccount | null>(null);
+  const [authReady, setAuthReady] = useState<boolean>(false);
   const [services, setServices] = useState<Service[]>(initialServices);
   const [orders, setOrders] = useState<Order[]>(initialOrders);
   const [activeOrderId, setActiveOrderId] = useState<string>('IL-1024');
@@ -112,6 +152,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const isHydratedRef = useRef(false);
+  const sessionRequestVersionRef = useRef(0);
 
   // Portal navigation states
   const [guestStep, setGuestStep] = useState<number>(1);
@@ -121,7 +162,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [kurirTab, setKurirTab] = useState<KurirTab>('JADWAL');
   const [adminTab, setAdminTab] = useState<AdminTab>('ORDER_MASUK');
 
-  // Hydrate persisted state from localStorage on client mount
+  // Hydrate domain state (never auth/role/password) from localStorage on client mount
   useEffect(() => {
     let cancelled = false;
     Promise.resolve().then(() => {
@@ -129,9 +170,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       try {
         const raw = window.localStorage.getItem(STORAGE_KEY);
         if (raw) {
-          const parsed = JSON.parse(raw) as Partial<PersistedState>;
-          if (parsed.role) setRole(parsed.role);
-          if (parsed.currentUser !== undefined) setCurrentUser(parsed.currentUser);
+          const parsed = JSON.parse(raw) as Partial<PersistedState> & {
+            role?: unknown;
+            currentUser?: unknown;
+          };
           if (Array.isArray(parsed.services) && parsed.services.length > 0) {
             setServices(parsed.services);
           }
@@ -146,6 +188,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (Array.isArray(parsed.deliveryZones) && parsed.deliveryZones.length > 0) {
             setDeliveryZones(parsed.deliveryZones);
           }
+          // Strip legacy auth fields if present in existing localStorage data
+          if ('role' in parsed || 'currentUser' in parsed) {
+            const sanitized: PersistedState = {
+              services:
+                Array.isArray(parsed.services) && parsed.services.length > 0
+                  ? parsed.services
+                  : initialServices,
+              orders:
+                Array.isArray(parsed.orders) && parsed.orders.length > 0
+                  ? parsed.orders
+                  : initialOrders,
+              courierTasks:
+                Array.isArray(parsed.courierTasks) && parsed.courierTasks.length > 0
+                  ? parsed.courierTasks
+                  : initialCourierTasks,
+              deliveryZones:
+                Array.isArray(parsed.deliveryZones) && parsed.deliveryZones.length > 0
+                  ? parsed.deliveryZones
+                  : initialDeliveryZones,
+            };
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
+          }
         }
       } catch {
         // Ignore storage access or malformed JSON errors
@@ -158,13 +222,60 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Persist key domain state changes to localStorage
+  // Sync authoritative auth session from HttpOnly cookie via server API on mount
+  useEffect(() => {
+    let cancelled = false;
+    const requestVersion = ++sessionRequestVersionRef.current;
+
+    const syncSession = async () => {
+      try {
+        const response = await fetch('/api/auth/session', {
+          method: 'GET',
+          cache: 'no-store',
+          credentials: 'same-origin',
+        });
+        if (cancelled || sessionRequestVersionRef.current !== requestVersion) return;
+
+        if (!response.ok) {
+          setCurrentUser(null);
+          setRole('PELANGGAN_TAMU');
+          return;
+        }
+
+        const data = (await response.json()) as Partial<SessionResponse>;
+        if (cancelled || sessionRequestVersionRef.current !== requestVersion) return;
+
+        const safeUser = data.authenticated ? sanitizePublicUser(data.user) : null;
+        if (safeUser) {
+          setCurrentUser(safeUser);
+          setRole(safeUser.role);
+        } else {
+          setCurrentUser(null);
+          setRole('PELANGGAN_TAMU');
+        }
+      } catch {
+        if (cancelled || sessionRequestVersionRef.current !== requestVersion) return;
+        setCurrentUser(null);
+        setRole('PELANGGAN_TAMU');
+      } finally {
+        if (!cancelled) {
+          setAuthReady(true);
+        }
+      }
+    };
+
+    void syncSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Persist key domain state changes to localStorage (auth stays server-side in HttpOnly cookie)
   useEffect(() => {
     if (!isHydratedRef.current) return;
     try {
       const payload: PersistedState = {
-        role,
-        currentUser,
         services,
         orders,
         courierTasks,
@@ -174,7 +285,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // Ignore quota or private-mode errors
     }
-  }, [role, currentUser, services, orders, courierTasks, deliveryZones]);
+  }, [services, orders, courierTasks, deliveryZones]);
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -211,39 +322,102 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, [orders]);
 
-  // Login handler
-  const login = (identity: string, password: string) => {
-    const user = findUserByCredentials(identity, password);
-    if (!user) {
-      return { success: false, error: 'Username/nomor WhatsApp atau password salah.' };
-    }
-    setCurrentUser(user);
-    setRole(user.role);
-    return { success: true };
-  };
+  // Login handler (sets signed HttpOnly session cookie via API)
+  const login = useCallback(
+    async (
+      identity: string,
+      password: string,
+      rememberMe = true
+    ): Promise<AuthActionResult> => {
+      sessionRequestVersionRef.current += 1;
+      try {
+        const response = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          cache: 'no-store',
+          body: JSON.stringify({ identity, password, rememberMe }),
+        });
 
-  // Logout handler
-  const logout = () => {
-    setCurrentUser(null);
-    setRole('PELANGGAN_TAMU');
-    setGuestStep(1);
-    showToast('Anda telah keluar dari akun.', 'info');
-  };
+        let data: Partial<LoginResponse> | null = null;
+        try {
+          data = (await response.json()) as Partial<LoginResponse>;
+        } catch {
+          data = null;
+        }
 
-  // Quick Demo Login
-  const loginAsDemo = (targetRole: Role) => {
-    if (targetRole === 'PELANGGAN_TAMU') {
+        const safeUser = data?.success ? sanitizePublicUser(data.user) : null;
+        if (!response.ok || !safeUser) {
+          return {
+            success: false,
+            error: data?.error || 'Username/nomor WhatsApp atau password salah.',
+          };
+        }
+
+        setCurrentUser(safeUser);
+        setRole(safeUser.role);
+        setAuthReady(true);
+        return { success: true, user: safeUser };
+      } catch {
+        return {
+          success: false,
+          error: 'Gagal menghubungi server autentikasi. Silakan coba lagi.',
+        };
+      }
+    },
+    []
+  );
+
+  // Logout handler (clears HttpOnly session cookie via API)
+  const logout = useCallback(async (): Promise<void> => {
+    sessionRequestVersionRef.current += 1;
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+    } catch {
+      // Always reset client auth state even if network hiccups
+    } finally {
       setCurrentUser(null);
       setRole('PELANGGAN_TAMU');
       setGuestStep(1);
-      return;
+      setAuthReady(true);
+      showToast('Anda telah keluar dari akun.', 'info');
     }
-    const account = DUMMY_ACCOUNTS.find((a) => a.role === targetRole);
-    if (account) {
-      setCurrentUser(account);
-      setRole(account.role);
-    }
-  };
+  }, [showToast]);
+
+  // Quick Demo Login (creates real signed HttpOnly cookie via /api/auth/login or clears via /api/auth/logout)
+  const loginAsDemo = useCallback(
+    async (targetRole: Role): Promise<AuthActionResult> => {
+      if (targetRole === 'PELANGGAN_TAMU') {
+        sessionRequestVersionRef.current += 1;
+        try {
+          await fetch('/api/auth/logout', {
+            method: 'POST',
+            credentials: 'same-origin',
+            cache: 'no-store',
+          });
+        } catch {
+          // Ignore network errors while switching to guest mode
+        } finally {
+          setCurrentUser(null);
+          setRole('PELANGGAN_TAMU');
+          setGuestStep(1);
+          setAuthReady(true);
+        }
+        return { success: true };
+      }
+
+      const account = DUMMY_ACCOUNTS.find((a) => a.role === targetRole);
+      if (!account) {
+        return { success: false, error: 'Akun demo tidak ditemukan.' };
+      }
+      return login(account.username, account.password, true);
+    },
+    [login]
+  );
 
   // Add Service
   const addService = (newService: Omit<Service, 'id'>) => {
@@ -395,6 +569,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         role,
         setRole,
         currentUser,
+        authReady,
         login,
         logout,
         loginAsDemo,

@@ -1,6 +1,4 @@
 import type { Metadata } from 'next';
-import PortalShell from '@/components/layout/PortalShell';
-import AdminSidebar from '@/components/navigation/AdminSidebar';
 import AdminDashboard from '@/components/admin/AdminDashboard';
 
 export const metadata: Metadata = {
@@ -9,9 +7,5 @@ export const metadata: Metadata = {
 };
 
 export default function AdminPage() {
-  return (
-    <PortalShell sidebar={<AdminSidebar />}>
-      <AdminDashboard />
-    </PortalShell>
-  );
+  return <AdminDashboard />;
 }

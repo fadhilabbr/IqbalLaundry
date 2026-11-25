@@ -10,6 +10,60 @@ export interface UserAccount {
   description: string;
 }
 
+export type PublicUserAccount = Omit<UserAccount, 'password'>;
+
+export function toPublicUser(user: UserAccount): PublicUserAccount {
+  return {
+    username: user.username,
+    phone: user.phone,
+    name: user.name,
+    role: user.role,
+    roleLabel: user.roleLabel,
+    description: user.description,
+  };
+}
+
+export function getRouteForRole(role: Role): string {
+  switch (role) {
+    case 'ADMIN':
+      return '/admin';
+    case 'KURIR':
+      return '/kurir';
+    case 'MEMBER':
+      return '/member';
+    default:
+      return '/dashboard';
+  }
+}
+
+export function canRoleAccessPath(role: Role, pathname: string): boolean {
+  if (
+    !pathname ||
+    !pathname.startsWith('/') ||
+    pathname.startsWith('//') ||
+    pathname.includes('\\')
+  ) {
+    return false;
+  }
+
+  const cleanPath = pathname.split(/[?#]/)[0];
+
+  if (cleanPath === '/admin' || cleanPath.startsWith('/admin/')) {
+    return role === 'ADMIN';
+  }
+  if (cleanPath === '/kurir' || cleanPath.startsWith('/kurir/')) {
+    return role === 'KURIR';
+  }
+  if (cleanPath === '/member' || cleanPath.startsWith('/member/')) {
+    return role === 'MEMBER';
+  }
+  if (cleanPath === '/dashboard' || cleanPath.startsWith('/dashboard/')) {
+    return true;
+  }
+
+  return false;
+}
+
 export const DUMMY_ACCOUNTS: UserAccount[] = [
   {
     username: 'admin',

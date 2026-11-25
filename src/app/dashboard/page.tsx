@@ -1,6 +1,4 @@
 import type { Metadata } from 'next';
-import PortalShell from '@/components/layout/PortalShell';
-import GuestSidebar from '@/components/navigation/GuestSidebar';
 import PelangganTamuFlow from '@/components/pelanggan/PelangganTamuFlow';
 
 export const metadata: Metadata = {
@@ -9,9 +7,5 @@ export const metadata: Metadata = {
 };
 
 export default function DashboardPage() {
-  return (
-    <PortalShell sidebar={<GuestSidebar />}>
-      <PelangganTamuFlow />
-    </PortalShell>
-  );
+  return <PelangganTamuFlow />;
 }

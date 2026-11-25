@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
@@ -15,6 +15,8 @@ import {
   ArrowUpRight,
   Check,
   CheckCircle,
+  Copy,
+  MagnifyingGlass,
   UploadSimple,
   QrCode,
   Bank,
@@ -29,15 +31,85 @@ import {
   OrderDetailsFormValues,
   OrderAddressFormValues,
 } from '@/lib/validations';
-import { Service } from '@/types';
+import { Order, Service } from '@/types';
 
-function getStepLabel(step: number): string {
-  if (step <= 3) return 'Pilih layanan';
-  if (step <= 5) return 'Detail pesanan';
-  if (step === 6) return 'Alamat pickup';
-  if (step === 7) return 'Estimasi biaya';
-  if (step <= 12) return 'Pembayaran';
-  return 'Lacak pesanan';
+const BTN_PRIMARY =
+  'inline-flex items-center justify-center gap-2 bg-[#2562eb] hover:bg-[#1d4ed8] text-white font-semibold text-xs sm:text-sm h-11 px-6 rounded-lg transition-all duration-150 ease-out shadow-xs whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]';
+
+const BTN_SECONDARY =
+  'inline-flex items-center justify-center gap-2 border border-[#e2e8f0] bg-white hover:bg-[#f8fafc] text-[#475569] hover:text-[#0f2342] font-semibold text-xs sm:text-sm h-10 px-4 rounded-lg transition-all duration-150 ease-out whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]';
+
+const INPUT_BASE =
+  'w-full bg-[#f8fafc] border rounded-lg px-3.5 py-2.5 text-sm text-[#0f2342] placeholder:text-[#94a3b8] focus:outline-none focus:bg-white focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 transition-all duration-150 ease-out';
+
+interface StepContextHeaderProps {
+  stepNumber?: number;
+  totalSteps?: number;
+  backLabel: string;
+  onBack: () => void;
+  title: string;
+  description?: string;
+  rightBadge?: React.ReactNode;
+}
+
+function StepContextHeader({
+  stepNumber,
+  totalSteps = 4,
+  backLabel,
+  onBack,
+  title,
+  description,
+  rightBadge,
+}: StepContextHeaderProps) {
+  return (
+    <div className="flex flex-col gap-2.5 pb-4 border-b border-[#e2e8f0]">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#475569] hover:text-[#0f2342] py-1 px-2 -ml-2 rounded-lg hover:bg-[#f8fafc] transition-all duration-150 ease-out cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+        >
+          <ArrowLeft size={14} weight="bold" className="shrink-0" />
+          <span>{backLabel}</span>
+        </button>
+
+        {rightBadge ??
+          (stepNumber !== undefined && (
+            <span className="inline-flex items-center rounded-full bg-[#eff6ff] border border-[#bfdbfe] px-2.5 py-0.5 text-xs font-semibold text-[#2562eb] tabular-nums">
+              Langkah {stepNumber} dari {totalSteps}
+            </span>
+          ))}
+      </div>
+
+      <div>
+        <h1 className="text-2xl sm:text-[28px] font-bold tracking-tight text-[#0f2342] leading-tight">
+          {title}
+        </h1>
+        {description && (
+          <p className="text-xs sm:text-sm text-[#475569] mt-1 max-w-[65ch] leading-relaxed">
+            {description}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function getOrderStatusStyle(status: Order['status']): string {
+  switch (status) {
+    case 'SELESAI':
+      return 'bg-emerald-50 text-emerald-700 border border-emerald-200';
+    case 'DICUCI':
+    case 'DISETRIKA':
+    case 'SIAP_DIKIRIM':
+      return 'bg-sky-50 text-sky-700 border border-sky-200';
+    case 'DITERIMA':
+      return 'bg-[#eff6ff] text-[#2562eb] border border-[#bfdbfe]';
+    case 'GAGAL':
+      return 'bg-red-50 text-red-700 border border-red-200';
+    default:
+      return 'bg-amber-50 text-amber-700 border border-amber-200';
+  }
 }
 
 export default function PelangganTamuFlow() {
@@ -56,6 +128,7 @@ export default function PelangganTamuFlow() {
   } = useApp();
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const detailsForm = useForm<OrderDetailsFormValues>({
     resolver: zodResolver(orderDetailsSchema),
@@ -85,32 +158,56 @@ export default function PelangganTamuFlow() {
   const [paymentMethod, setPaymentMethod] = useState<'QRIS' | 'TRANSFER' | 'COD'>('QRIS');
   const [formError, setFormError] = useState<string | null>(null);
   const [uploadedProof, setUploadedProof] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [orderSearch, setOrderSearch] = useState('');
 
-  // Current active order for tracking
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
+
   const currentOrder = orders.find((o) => o.id === activeOrderId) || orders[0];
 
-  // Calculations
   const activeService = guestSelectedService || services[1] || services[0];
   const serviceCost = (activeService?.price || 8000) * safeWeight;
   const deliveryFee = 8000;
   const totalCost = serviceCost + deliveryFee;
 
+  const handleCopy = async (value: string, key: string, label: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      }
+      setCopiedKey(key);
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+      }
+      copyTimerRef.current = setTimeout(() => setCopiedKey(null), 2000);
+      showToast(`${label} ${value} disalin ke clipboard.`, 'success');
+    } catch {
+      showToast(`Gagal menyalin ${label.toLowerCase()}.`, 'error');
+    }
+  };
+
   const handleSelectService = (srv: Service) => {
     setGuestSelectedService(srv);
-    setGuestStep(3); // Screen 03: Layanan terpilih
+    setGuestStep(3);
   };
 
   const handleProceedToDetails = () => {
     if (!guestSelectedService) {
-      setGuestStep(2); // Screen 02: Peringatan layanan
+      setGuestStep(2);
       return;
     }
-    setGuestStep(4); // Screen 04: Detail pesanan
+    setGuestStep(4);
   };
 
   const onDetailsValid = () => {
     setFormError(null);
-    setGuestStep(6); // Screen 06: Alamat map
+    setGuestStep(6);
   };
 
   const onDetailsInvalid = () => {
@@ -120,7 +217,7 @@ export default function PelangganTamuFlow() {
 
   const onAddressValid = () => {
     setFormError(null);
-    setGuestStep(7); // Screen 07: Estimasi
+    setGuestStep(7);
   };
 
   const handleCreateOrder = () => {
@@ -141,26 +238,25 @@ export default function PelangganTamuFlow() {
       paymentMethod,
     });
     showToast(`Pesanan ${newOrder.id} berhasil dibuat.`, 'success');
-    setGuestStep(8); // Screen 08: Nomor pesanan
+    setGuestStep(8);
   };
 
   const handleGoToPayment = () => {
-    setGuestStep(9); // Screen 09: Metode bayar
+    setGuestStep(9);
   };
 
   const handleSelectPaymentMethod = (method: 'QRIS' | 'TRANSFER' | 'COD') => {
     setPaymentMethod(method);
     if (method === 'QRIS') {
-      setGuestStep(10); // Screen 10: QRIS
+      setGuestStep(10);
     } else if (method === 'TRANSFER') {
-      setGuestStep(12); // Screen 12: Bukti bayar
+      setGuestStep(12);
     } else {
-      // COD / Bayar saat pickup
       if (currentOrder) {
         confirmPayment(currentOrder.id, 'COD');
         showToast(`Pembayaran tunai (COD) untuk ${currentOrder.id} dikonfirmasi.`, 'success');
       }
-      setGuestStep(15); // Screen 15: Detail status
+      setGuestStep(15);
     }
   };
 
@@ -169,11 +265,11 @@ export default function PelangganTamuFlow() {
       confirmPayment(currentOrder.id, paymentMethod);
       showToast(`Pembayaran pesanan ${currentOrder.id} berhasil diverifikasi.`, 'success');
     }
-    setGuestStep(15); // Screen 15: Detail status
+    setGuestStep(15);
   };
 
   const handlePaymentFailed = () => {
-    setGuestStep(11); // Screen 11: Gagal bayar
+    setGuestStep(11);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -184,32 +280,47 @@ export default function PelangganTamuFlow() {
     }
   };
 
-  return (
-    <div className="flex-1 flex flex-col bg-[#f5f8fc] min-h-full p-4 sm:p-8 lg:p-10">
-      {/* Brand & Breadcrumb Header */}
-      <div className="flex items-center justify-between w-full mb-6">
-        <div className="flex items-center gap-2 text-xs sm:text-[13px] text-[#64748b]">
-          <span className="font-semibold text-[#0f2342]">Beranda</span>
-          <span>/</span>
-          <span className="text-blue-600 font-medium">{getStepLabel(guestStep)}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="bg-[#dbeafe] text-[#2562eb] text-xs font-semibold px-3 py-1 rounded-full shadow-sm">
-            Pelanggan Tamu
-          </span>
-        </div>
-      </div>
+  const normalizedQuery = orderSearch.trim().toLowerCase();
+  const filteredOrders = normalizedQuery
+    ? orders.filter(
+        (ord) =>
+          ord.id.toLowerCase().includes(normalizedQuery) ||
+          ord.customerName.toLowerCase().includes(normalizedQuery) ||
+          ord.serviceName.toLowerCase().includes(normalizedQuery)
+      )
+    : orders;
 
+  return (
+    <div className="flex-1 flex flex-col bg-[#f5f8fc] min-h-full p-4 sm:p-6 lg:p-8">
       {/* =========================================================================
-          SCREEN 01: PILIH LAYANAN (Phase 1)
+          SCREEN 01: PILIH LAYANAN
       ========================================================================== */}
       {guestStep === 1 && (
-        <div className="bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 flex flex-col gap-6 shadow-sm">
-          <div>
-            <h3 className="text-xl font-bold text-[#0f2342]">Pilih Layanan Laundry</h3>
-            <p className="text-xs sm:text-sm text-[#64748b] mt-1">
-              Pilih salah satu layanan populer berikut untuk melanjutkan proses order jemput ke lokasi Anda.
-            </p>
+        <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 flex flex-col gap-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)]">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-[#e2e8f0]">
+            <div>
+              <h1 className="text-2xl sm:text-[28px] font-bold tracking-tight text-[#0f2342] leading-tight">
+                Pilih Layanan Laundry
+              </h1>
+              <p className="text-xs sm:text-sm text-[#475569] mt-1 max-w-[65ch] leading-relaxed">
+                Pilih salah satu layanan di bawah untuk melanjutkan proses pemesanan jemput-antar kurir ke lokasi Anda.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setGuestStep(14)}
+              className="inline-flex items-center justify-between sm:justify-start gap-2.5 self-start lg:self-center rounded-xl border border-[#e2e8f0] bg-[#f8fafc] hover:border-[#2562eb] hover:bg-[#eff6ff]/60 px-3.5 py-2.5 text-xs font-semibold text-[#475569] transition-all duration-150 ease-out cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <MagnifyingGlass size={15} weight="bold" className="text-[#2562eb] shrink-0" />
+                <span>Sudah punya kode pesanan?</span>
+              </span>
+              <span className="inline-flex items-center gap-1 text-[#2562eb] font-bold">
+                <span>Lacak Pesanan</span>
+                <ArrowRight size={13} weight="bold" />
+              </span>
+            </button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -218,25 +329,28 @@ export default function PelangganTamuFlow() {
                 key={srv.id}
                 type="button"
                 onClick={() => handleSelectService(srv)}
-                className="w-full text-left group border rounded-[14px] p-5 sm:p-6 cursor-pointer transition-all flex flex-col justify-between h-[140px] relative bg-[#f8fafc] border-[#e2e8f0] hover:bg-blue-50/70 hover:border-[#2562eb] hover:ring-2 hover:ring-blue-500/20 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+                className="w-full text-left group border border-[#e2e8f0] bg-[#f8fafc] rounded-xl p-4 sm:p-5 cursor-pointer transition-all duration-150 ease-out flex flex-col justify-between min-h-[148px] hover:border-[#2562eb] hover:bg-[#eff6ff]/60 hover:shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
               >
                 <div className="flex items-start justify-between gap-2 w-full">
                   <div>
                     <p className="font-bold text-[#0f2342] text-base leading-snug">{srv.name}</p>
-                    <p className="text-xs text-[#64748b] mt-0.5 line-clamp-1">{srv.description}</p>
+                    <p className="text-xs text-[#64748b] mt-1 line-clamp-2 max-w-[65ch]">
+                      {srv.description}
+                    </p>
                   </div>
                   {srv.popular && (
-                    <span className="text-[10px] bg-blue-100 text-blue-700 px-2.5 py-0.5 rounded-full font-bold shrink-0">
+                    <span className="text-[11px] bg-[#eff6ff] text-[#2562eb] border border-[#bfdbfe] px-2.5 py-0.5 rounded-full font-semibold shrink-0">
                       Populer
                     </span>
                   )}
                 </div>
-                <div className="flex items-center justify-between pt-2 border-t border-slate-200/50 w-full">
-                  <p className="font-extrabold text-[#2562eb] text-lg sm:text-[20px] tabular-nums">
+
+                <div className="flex items-center justify-between pt-3 mt-4 border-t border-[#e2e8f0] w-full">
+                  <p className="font-bold text-[#2562eb] text-lg sm:text-xl tabular-nums">
                     {formatRupiah(srv.price)}
-                    <span className="text-xs font-normal text-slate-500">/{srv.unit}</span>
+                    <span className="text-xs font-normal text-[#64748b]">/{srv.unit}</span>
                   </p>
-                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-400 group-hover:text-[#2562eb] transition-colors">
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#64748b] group-hover:text-[#2562eb] transition-colors duration-150">
                     <span>Pilih</span>
                     <ArrowRight size={14} weight="bold" />
                   </span>
@@ -245,133 +359,19 @@ export default function PelangganTamuFlow() {
             ))}
           </div>
 
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-[#e2e8f0]">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
             <button
               type="button"
               onClick={() => setGuestStep(2)}
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-[10px] text-xs font-semibold text-[#64748b] hover:text-[#0f2342] transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className="inline-flex items-center justify-center sm:justify-start gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-[#64748b] hover:text-[#0f2342] hover:bg-[#f8fafc] transition-all duration-150 ease-out cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
             >
               <Info size={16} weight="regular" className="shrink-0" />
               <span>Lihat Informasi & Ketentuan Layanan</span>
             </button>
-            <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
-              <button
-                type="button"
-                onClick={handleProceedToDetails}
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-[#2562eb] hover:bg-blue-700 text-white font-bold text-sm h-12 px-8 rounded-[10px] transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
-              >
-                <span>Lanjutkan ke Data Pesanan</span>
-                <ArrowRight size={16} weight="bold" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* =========================================================================
-          SCREEN 02: PERINGATAN LAYANAN (Phase 1)
-      ========================================================================== */}
-      {guestStep === 2 && (
-        <div className="bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 flex flex-col gap-6 shadow-sm">
-          <div className="bg-amber-50 border border-amber-200 rounded-[14px] p-6">
-            <h3 className="font-bold text-amber-900 text-lg mb-2 flex items-center gap-2">
-              <WarningCircle size={20} weight="bold" className="text-amber-600 shrink-0" />
-              <span>Informasi & Ketentuan Layanan</span>
-            </h3>
-            <p className="text-xs sm:text-sm text-amber-800 leading-relaxed">
-              Harap perhatikan ketentuan operasional berikut agar proses penjemputan dan pencucian berjalan tepat waktu:
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5">
-              <div className="bg-white/90 p-4 rounded-xl border border-amber-200 shadow-xs">
-                <p className="text-xs text-amber-700 font-semibold">Minimum Order</p>
-                <p className="text-xl font-black text-amber-950 mt-1 tabular-nums">3 kg</p>
-                <p className="text-[11px] text-amber-600 mt-1">Berat di bawah 3 kg tetap dihitung minimal 3 kg.</p>
-              </div>
-              <div className="bg-white/90 p-4 rounded-xl border border-amber-200 shadow-xs">
-                <p className="text-xs text-amber-700 font-semibold">Estimasi Pengerjaan</p>
-                <p className="text-xl font-black text-amber-950 mt-1 tabular-nums">1 - 2 Hari</p>
-                <p className="text-[11px] text-amber-600 mt-1">Pakaian wangi, bersih, dan higienis bergaransi.</p>
-              </div>
-              <div className="bg-white/90 p-4 rounded-xl border border-amber-200 shadow-xs">
-                <p className="text-xs text-amber-700 font-semibold">Jam Operasional Kurir</p>
-                <p className="text-xl font-black text-amber-950 mt-1 tabular-nums">10.00 - 17.00</p>
-                <p className="text-[11px] text-amber-600 mt-1">Kurir menjemput sesuai koordinat alamat map Anda.</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
             <button
               type="button"
-              onClick={() => setGuestStep(1)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
-            >
-              <ArrowLeft size={16} weight="bold" />
-              <span>Kembali ke Layanan</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setGuestStep(guestSelectedService ? 3 : 1)}
-              className="inline-flex items-center gap-2 bg-[#2562eb] hover:bg-blue-700 text-white font-bold text-xs sm:text-sm h-12 px-8 rounded-[10px] transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
-            >
-              <span>Saya Mengerti, Lanjutkan</span>
-              <ArrowRight size={16} weight="bold" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* =========================================================================
-          SCREEN 03: LAYANAN TERPILIH (Phase 1)
-      ========================================================================== */}
-      {guestStep === 3 && (
-        <div className="bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 flex flex-col gap-6 shadow-sm">
-          <div className="bg-blue-50/70 border border-blue-200 rounded-[14px] p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <span className="inline-block text-xs font-bold text-blue-600 uppercase tracking-wider bg-blue-100 px-2.5 py-0.5 rounded-full mb-1">
-                Layanan Terpilih
-              </span>
-              <h3 className="text-2xl font-black text-[#0f2342] mt-1">{activeService.name}</h3>
-              <p className="text-xs sm:text-sm text-[#64748b] mt-1">{activeService.description}</p>
-            </div>
-            <div className="text-left sm:text-right shrink-0">
-              <p className="text-2xl sm:text-3xl font-black text-[#2562eb] tabular-nums">
-                {formatRupiah(activeService.price)}
-                <span className="text-sm font-normal text-slate-500">/{activeService.unit}</span>
-              </p>
-              <button
-                type="button"
-                onClick={() => setGuestStep(1)}
-                className="inline-flex items-center gap-1 text-xs font-semibold text-[#2562eb] hover:underline mt-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 rounded"
-              >
-                <span>Ganti pilihan layanan</span>
-                <ArrowUpRight size={14} weight="bold" />
-              </button>
-            </div>
-          </div>
-
-          <div className="border border-[#e2e8f0] rounded-[14px] p-5 bg-[#f8fafc]">
-            <h4 className="font-bold text-sm text-[#0f2342] mb-2.5">Keunggulan & Standar Pengerjaan:</h4>
-            <ul className="text-xs sm:text-sm text-[#64748b] space-y-2 list-disc pl-5">
-              <li>Pencucian higienis 1 mesin terpisah per pelanggan (pakaian tidak dicampur).</li>
-              <li>Pilihan deterjen anti-apek dan pelembut wangi premium tahan lama.</li>
-              <li>Gratis plastik packing rapi dan tahan percikan air saat pengantaran.</li>
-            </ul>
-          </div>
-
-          <div className="flex items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
-            <button
-              type="button"
-              onClick={() => setGuestStep(1)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
-            >
-              <ArrowLeft size={16} weight="bold" />
-              <span>Ganti Layanan</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setGuestStep(4)}
-              className="inline-flex items-center gap-2 bg-[#2562eb] hover:bg-blue-700 text-white font-bold text-xs sm:text-sm h-12 px-8 rounded-[10px] transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              onClick={handleProceedToDetails}
+              className={BTN_PRIMARY}
             >
               <span>Lanjutkan ke Data Pesanan</span>
               <ArrowRight size={16} weight="bold" />
@@ -381,194 +381,366 @@ export default function PelangganTamuFlow() {
       )}
 
       {/* =========================================================================
-          SCREEN 04: DETAIL PESANAN (Phase 2)
+          SCREEN 02: INFORMASI & KETENTUAN LAYANAN
       ========================================================================== */}
-      {guestStep === 4 && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Columns: Form */}
-          <form
-            onSubmit={detailsForm.handleSubmit(onDetailsValid, onDetailsInvalid)}
-            noValidate
-            className="lg:col-span-2 bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 shadow-sm flex flex-col gap-5"
-          >
-            <div className="border-b border-[#e2e8f0] pb-3">
-              <h3 className="font-bold text-[#0f2342] text-lg">
-                Data Pemesan & Cucian
-              </h3>
-              <p className="text-xs text-[#64748b] mt-0.5">
-                Pastikan nama dan nomor WhatsApp aktif agar kurir mudah menghubungi Anda saat penjemputan.
+      {guestStep === 2 && (
+        <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 flex flex-col gap-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)]">
+          <StepContextHeader
+            backLabel="Kembali ke Layanan"
+            onBack={() => setGuestStep(1)}
+            title="Informasi & Ketentuan Layanan"
+            description="Harap perhatikan ketentuan operasional berikut agar proses penjemputan dan pencucian berjalan tepat waktu."
+            rightBadge={
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-200 px-2.5 py-0.5 text-xs font-semibold text-amber-800">
+                <WarningCircle size={14} weight="bold" />
+                <span>Panduan Order</span>
+              </span>
+            }
+          />
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="bg-[#f8fafc] p-4 sm:p-5 rounded-xl border border-[#e2e8f0]">
+              <p className="text-xs text-[#64748b] font-semibold">Minimum Order</p>
+              <p className="text-xl font-bold text-[#0f2342] mt-1 tabular-nums">3 kg</p>
+              <p className="text-xs text-[#475569] mt-1.5 leading-relaxed">
+                Berat di bawah 3 kg tetap dihitung minimal 3 kg untuk pencucian terpisah.
               </p>
             </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-[#0f2342] mb-1.5">Nama Lengkap</label>
-                <input
-                  type="text"
-                  {...detailsForm.register('customerName')}
-                  placeholder="Contoh: Budi Santoso"
-                  className={`w-full bg-[#f8fafc] border rounded-[10px] px-3.5 py-2.5 text-sm text-[#0f2342] placeholder:text-slate-400 focus:outline-none focus:bg-white transition ${
-                    detailsForm.formState.errors.customerName
-                      ? 'border-red-400 focus:border-red-500'
-                      : 'border-[#cbd5e1] focus:border-[#2562eb]'
-                  }`}
-                />
-                {detailsForm.formState.errors.customerName && (
-                  <p className="text-[11px] text-red-600 mt-1 font-medium">
-                    {detailsForm.formState.errors.customerName.message}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#0f2342] mb-1.5">Nomor WhatsApp Aktif</label>
-                <input
-                  type="tel"
-                  {...detailsForm.register('phone')}
-                  placeholder="08xxxxxxxxxx"
-                  className={`w-full bg-[#f8fafc] border rounded-[10px] px-3.5 py-2.5 text-sm tabular-nums text-[#0f2342] placeholder:text-slate-400 focus:outline-none focus:bg-white transition ${
-                    detailsForm.formState.errors.phone
-                      ? 'border-red-400 focus:border-red-500'
-                      : 'border-[#cbd5e1] focus:border-[#2562eb]'
-                  }`}
-                />
-                {detailsForm.formState.errors.phone && (
-                  <p className="text-[11px] text-red-600 mt-1 font-medium">
-                    {detailsForm.formState.errors.phone.message}
-                  </p>
-                )}
-              </div>
+            <div className="bg-[#f8fafc] p-4 sm:p-5 rounded-xl border border-[#e2e8f0]">
+              <p className="text-xs text-[#64748b] font-semibold">Estimasi Pengerjaan</p>
+              <p className="text-xl font-bold text-[#0f2342] mt-1 tabular-nums">1 - 2 Hari</p>
+              <p className="text-xs text-[#475569] mt-1.5 leading-relaxed">
+                Pakaian wangi, bersih, dan dikemas rapi anti lembap bergaransi.
+              </p>
             </div>
+            <div className="bg-[#f8fafc] p-4 sm:p-5 rounded-xl border border-[#e2e8f0]">
+              <p className="text-xs text-[#64748b] font-semibold">Jam Operasional Kurir</p>
+              <p className="text-xl font-bold text-[#0f2342] mt-1 tabular-nums">10.00 - 17.00</p>
+              <p className="text-xs text-[#475569] mt-1.5 leading-relaxed">
+                Kurir menjemput langsung sesuai titik alamat yang Anda tentukan.
+              </p>
+            </div>
+          </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-[#0f2342] mb-1.5">
-                  Perkiraan Berat ({activeService.unit})
-                </label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="number"
-                    min={1}
-                    {...detailsForm.register('weight', { valueAsNumber: true })}
-                    className={`w-28 bg-[#f8fafc] border rounded-[10px] px-3.5 py-2.5 text-sm font-bold tabular-nums text-[#0f2342] placeholder:text-slate-400 focus:outline-none focus:bg-white transition ${
-                      detailsForm.formState.errors.weight
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
+            <button
+              type="button"
+              onClick={() => setGuestStep(1)}
+              className={BTN_SECONDARY}
+            >
+              <ArrowLeft size={16} weight="bold" />
+              <span>Kembali ke Layanan</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setGuestStep(guestSelectedService ? 3 : 1)}
+              className={BTN_PRIMARY}
+            >
+              <span>Saya Mengerti, Lanjutkan</span>
+              <ArrowRight size={16} weight="bold" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          SCREEN 03: LAYANAN TERPILIH (Langkah 1 dari 4)
+      ========================================================================== */}
+      {guestStep === 3 && (
+        <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 flex flex-col gap-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)]">
+          <StepContextHeader
+            stepNumber={1}
+            backLabel="Ganti Layanan"
+            onBack={() => setGuestStep(1)}
+            title={activeService.name}
+            description={activeService.description}
+          />
+
+          <div className="bg-[#eff6ff]/60 border border-[#bfdbfe] rounded-xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <span className="inline-block text-xs font-semibold text-[#2562eb] bg-white border border-[#bfdbfe] px-2.5 py-0.5 rounded-full">
+                Tarif Layanan Terpilih
+              </span>
+              <p className="text-2xl sm:text-3xl font-bold text-[#2562eb] mt-2 tabular-nums">
+                {formatRupiah(activeService.price)}
+                <span className="text-sm font-normal text-[#475569]">/{activeService.unit}</span>
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setGuestStep(1)}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#2562eb] hover:text-[#1d4ed8] hover:underline self-start sm:self-center py-1.5 px-2 rounded-lg transition-all duration-150 ease-out cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+            >
+              <span>Ganti pilihan layanan</span>
+              <ArrowUpRight size={14} weight="bold" />
+            </button>
+          </div>
+
+          <div className="border border-[#e2e8f0] rounded-xl p-4 sm:p-5 bg-[#f8fafc]">
+            <h2 className="font-bold text-sm text-[#0f2342] mb-2.5">
+              Keunggulan & Standar Pengerjaan
+            </h2>
+            <ul className="text-xs sm:text-sm text-[#475569] space-y-2 list-disc pl-5 max-w-[65ch]">
+              <li>Pencucian higienis 1 mesin terpisah per pelanggan (pakaian tidak dicampur).</li>
+              <li>Pilihan deterjen anti-apek dan pelembut wangi premium tahan lama.</li>
+              <li>Gratis plastik packing rapi dan tahan percikan air saat pengantaran.</li>
+            </ul>
+          </div>
+
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
+            <button
+              type="button"
+              onClick={() => setGuestStep(1)}
+              className={BTN_SECONDARY}
+            >
+              <ArrowLeft size={16} weight="bold" />
+              <span>Ganti Layanan</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setGuestStep(4)}
+              className={BTN_PRIMARY}
+            >
+              <span>Lanjutkan ke Data Pesanan</span>
+              <ArrowRight size={16} weight="bold" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          SCREEN 04: DETAIL PESANAN (Langkah 2 dari 4)
+      ========================================================================== */}
+      {guestStep === 4 && (
+        <div className="flex flex-col gap-6">
+          <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)]">
+            <StepContextHeader
+              stepNumber={2}
+              backLabel="Kembali ke Layanan"
+              onBack={() => setGuestStep(3)}
+              title="Data Pemesan & Cucian"
+              description="Pastikan nama dan nomor WhatsApp aktif agar kurir mudah menghubungi Anda saat penjemputan."
+            />
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+              <form
+                onSubmit={detailsForm.handleSubmit(onDetailsValid, onDetailsInvalid)}
+                noValidate
+                className="lg:col-span-2 flex flex-col gap-5"
+              >
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label
+                      htmlFor="guest-customer-name"
+                      className="block text-xs font-semibold text-[#0f2342] mb-1.5"
+                    >
+                      Nama Lengkap
+                    </label>
+                    <input
+                      id="guest-customer-name"
+                      type="text"
+                      {...detailsForm.register('customerName')}
+                      placeholder="Contoh: Budi Santoso"
+                      className={`${INPUT_BASE} ${
+                        detailsForm.formState.errors.customerName
+                          ? 'border-red-400 focus:border-red-500'
+                          : 'border-[#e2e8f0] focus:border-[#2562eb]'
+                      }`}
+                    />
+                    {detailsForm.formState.errors.customerName && (
+                      <p className="text-xs text-red-600 mt-1.5 font-medium">
+                        {detailsForm.formState.errors.customerName.message}
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="guest-phone"
+                      className="block text-xs font-semibold text-[#0f2342] mb-1.5"
+                    >
+                      Nomor WhatsApp Aktif
+                    </label>
+                    <input
+                      id="guest-phone"
+                      type="tel"
+                      {...detailsForm.register('phone')}
+                      placeholder="08xxxxxxxxxx"
+                      className={`${INPUT_BASE} tabular-nums ${
+                        detailsForm.formState.errors.phone
+                          ? 'border-red-400 focus:border-red-500'
+                          : 'border-[#e2e8f0] focus:border-[#2562eb]'
+                      }`}
+                    />
+                    {detailsForm.formState.errors.phone && (
+                      <p className="text-xs text-red-600 mt-1.5 font-medium">
+                        {detailsForm.formState.errors.phone.message}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label
+                      htmlFor="guest-weight"
+                      className="block text-xs font-semibold text-[#0f2342] mb-1.5"
+                    >
+                      Perkiraan Berat ({activeService.unit})
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <input
+                        id="guest-weight"
+                        type="number"
+                        min={1}
+                        {...detailsForm.register('weight', { valueAsNumber: true })}
+                        className={`w-28 bg-[#f8fafc] border rounded-lg px-3.5 py-2.5 text-sm font-bold tabular-nums text-[#0f2342] placeholder:text-[#94a3b8] focus:outline-none focus:bg-white focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 transition-all duration-150 ease-out ${
+                          detailsForm.formState.errors.weight
+                            ? 'border-red-400 focus:border-red-500'
+                            : 'border-[#e2e8f0] focus:border-[#2562eb]'
+                        }`}
+                      />
+                      <span className="text-xs text-[#64748b] tabular-nums">
+                        {activeService.unit} (Min. 3 kg)
+                      </span>
+                    </div>
+                    {detailsForm.formState.errors.weight && (
+                      <p className="text-xs text-red-600 mt-1.5 font-medium">
+                        {detailsForm.formState.errors.weight.message}
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <span className="block text-xs font-semibold text-[#0f2342] mb-1.5">
+                      Layanan Dipilih
+                    </span>
+                    <div className="bg-[#f8fafc] border border-[#e2e8f0] rounded-lg px-3.5 py-2.5 text-sm flex justify-between items-center gap-2">
+                      <span className="font-semibold text-[#0f2342] truncate">
+                        {activeService.name}
+                      </span>
+                      <span className="text-xs font-bold text-[#2562eb] tabular-nums shrink-0">
+                        {formatRupiah(activeService.price)}/{activeService.unit}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="guest-notes"
+                    className="block text-xs font-semibold text-[#0f2342] mb-1.5"
+                  >
+                    Catatan Khusus ke Kurir / Petugas (Opsional)
+                  </label>
+                  <textarea
+                    id="guest-notes"
+                    rows={3}
+                    {...detailsForm.register('notes')}
+                    placeholder="Misal: Pisahkan pakaian putih/luntur, parfum ocean breeze..."
+                    className={`${INPUT_BASE} ${
+                      detailsForm.formState.errors.notes
                         ? 'border-red-400 focus:border-red-500'
-                        : 'border-[#cbd5e1] focus:border-[#2562eb]'
+                        : 'border-[#e2e8f0] focus:border-[#2562eb]'
                     }`}
                   />
-                  <span className="text-xs text-[#64748b] tabular-nums">
-                    {activeService.unit} (Min. 3 kg)
-                  </span>
+                  {detailsForm.formState.errors.notes && (
+                    <p className="text-xs text-red-600 mt-1.5 font-medium">
+                      {detailsForm.formState.errors.notes.message}
+                    </p>
+                  )}
                 </div>
-                {detailsForm.formState.errors.weight && (
-                  <p className="text-[11px] text-red-600 mt-1 font-medium">
-                    {detailsForm.formState.errors.weight.message}
+
+                <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
+                  <button
+                    type="button"
+                    onClick={() => setGuestStep(3)}
+                    className={BTN_SECONDARY}
+                  >
+                    <ArrowLeft size={16} weight="bold" />
+                    <span>Kembali ke Layanan</span>
+                  </button>
+                  <button type="submit" className={BTN_PRIMARY}>
+                    <span>Lanjutkan ke Alamat & Peta</span>
+                    <ArrowRight size={16} weight="bold" />
+                  </button>
+                </div>
+              </form>
+
+              <aside className="bg-[#f8fafc] border border-[#e2e8f0] rounded-xl p-4 sm:p-5 flex flex-col justify-between gap-5 h-fit">
+                <div>
+                  <h2 className="font-bold text-[#0f2342] text-base mb-4 border-b border-[#e2e8f0] pb-2.5">
+                    Ringkasan Estimasi Biaya
+                  </h2>
+                  <div className="space-y-3 text-xs sm:text-sm">
+                    <div className="flex justify-between items-start gap-2">
+                      <span className="text-[#475569] tabular-nums">
+                        {activeService.name} ({safeWeight} {activeService.unit})
+                      </span>
+                      <span className="font-semibold text-[#0f2342] tabular-nums shrink-0">
+                        {formatRupiah(serviceCost)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-start gap-2">
+                      <span className="text-[#475569]">Ongkos Pickup & Delivery</span>
+                      <span className="font-semibold text-[#0f2342] tabular-nums shrink-0">
+                        {formatRupiah(deliveryFee)}
+                      </span>
+                    </div>
+                    <div className="border-t border-[#e2e8f0] pt-3 flex justify-between items-center gap-2">
+                      <span className="font-bold text-[#0f2342]">Total Estimasi</span>
+                      <span className="font-bold text-[#2562eb] text-xl tabular-nums">
+                        {formatRupiah(totalCost)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white border border-[#e2e8f0] rounded-xl p-3.5 text-xs text-[#475569]">
+                  <p className="font-semibold text-[#0f2342] mb-1">Catatan Timbangan</p>
+                  <p className="leading-relaxed">
+                    Total akhir ditimbang ulang secara akurat menggunakan timbangan digital saat kurir tiba di lokasi.
                   </p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#0f2342] mb-1.5">Layanan Dipilih</label>
-                <div className="bg-[#f8fafc] border border-[#cbd5e1] rounded-[10px] px-3.5 py-2.5 text-sm flex justify-between items-center">
-                  <span className="font-semibold text-[#0f2342]">{activeService.name}</span>
-                  <span className="text-xs font-bold text-[#2562eb] tabular-nums">{formatRupiah(activeService.price)}/{activeService.unit}</span>
                 </div>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-[#0f2342] mb-1.5">Catatan Khusus ke Kurir / Petugas (Opsional)</label>
-              <textarea
-                rows={2}
-                {...detailsForm.register('notes')}
-                placeholder="Misal: Pisahkan pakaian putih/luntur, parfum ocean breeze..."
-                className={`w-full bg-[#f8fafc] border rounded-[10px] px-3.5 py-2.5 text-sm text-[#0f2342] placeholder:text-slate-400 focus:outline-none focus:bg-white transition ${
-                  detailsForm.formState.errors.notes
-                    ? 'border-red-400 focus:border-red-500'
-                    : 'border-[#cbd5e1] focus:border-[#2562eb]'
-                }`}
-              />
-              {detailsForm.formState.errors.notes && (
-                <p className="text-[11px] text-red-600 mt-1 font-medium">
-                  {detailsForm.formState.errors.notes.message}
-                </p>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
-              <button
-                type="button"
-                onClick={() => setGuestStep(3)}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
-              >
-                <ArrowLeft size={16} weight="bold" />
-                <span>Kembali ke Layanan</span>
-              </button>
-              <button
-                type="submit"
-                className="inline-flex items-center gap-2 bg-[#2562eb] hover:bg-blue-700 text-white font-bold text-xs sm:text-sm h-12 px-8 rounded-[10px] transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
-              >
-                <span>Lanjutkan ke Alamat & Peta</span>
-                <ArrowRight size={16} weight="bold" />
-              </button>
-            </div>
-          </form>
-
-          {/* Right Column: Summary Card */}
-          <div className="bg-white border border-[#dce5f0] rounded-[16px] p-6 shadow-sm flex flex-col justify-between h-fit">
-            <div>
-              <h4 className="font-bold text-[#0f2342] text-base mb-4 border-b border-[#e2e8f0] pb-2">
-                Ringkasan Estimasi Pesanan
-              </h4>
-              <div className="space-y-3 text-xs sm:text-sm">
-                <div className="flex justify-between gap-2">
-                  <span className="text-[#64748b] tabular-nums">{activeService.name} ({safeWeight} {activeService.unit})</span>
-                  <span className="font-semibold text-[#0f2342] tabular-nums">{formatRupiah(serviceCost)}</span>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-[#64748b]">Ongkos Pickup & Delivery</span>
-                  <span className="font-semibold text-[#0f2342] tabular-nums">{formatRupiah(deliveryFee)}</span>
-                </div>
-                <div className="border-t border-[#e2e8f0] pt-3 flex justify-between items-center gap-2">
-                  <span className="font-bold text-[#0f2342]">Total Estimasi</span>
-                  <span className="font-extrabold text-[#2562eb] text-xl tabular-nums">{formatRupiah(totalCost)}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-6 bg-blue-50 border border-blue-200/60 rounded-xl p-3.5 text-xs text-[#64748b]">
-              <p className="font-bold text-[#2562eb] mb-1">Catatan Timbangan:</p>
-              Total akhir akan ditimbang ulang secara akurat menggunakan timbangan digital fisik saat kurir tiba di lokasi.
+              </aside>
             </div>
           </div>
         </div>
       )}
 
       {/* =========================================================================
-          SCREEN 05: ERROR DETAIL (Phase 2)
+          SCREEN 05: ERROR DETAIL (Langkah 2 dari 4)
       ========================================================================== */}
       {guestStep === 5 && (
-        <div className="bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 shadow-sm flex flex-col gap-6">
-          <div className="bg-red-50 border border-red-200 rounded-[14px] p-6">
-            <h3 className="font-bold text-red-900 text-base mb-2 flex items-center gap-2">
+        <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)] flex flex-col gap-6">
+          <StepContextHeader
+            stepNumber={2}
+            backLabel="Kembali ke Data Pesanan"
+            onBack={() => setGuestStep(4)}
+            title="Periksa Kembali Data Pesanan"
+            description="Beberapa informasi wajib perlu dilengkapi sebelum melanjutkan ke alamat penjemputan."
+          />
+
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 sm:p-5">
+            <h2 className="font-bold text-red-900 text-sm sm:text-base mb-2 flex items-center gap-2">
               <WarningCircle size={18} weight="bold" className="text-red-600 shrink-0" />
-              <span>Periksa Kembali Data Pesanan</span>
-            </h3>
-            <p className="text-sm text-red-700">
+              <span>Detail Data Belum Valid</span>
+            </h2>
+            <p className="text-xs sm:text-sm text-red-700 max-w-[65ch]">
               {formError || 'Beberapa kolom wajib belum terisi dengan benar:'}
             </p>
-            <ul className="text-xs sm:text-sm text-red-800 list-disc pl-5 mt-3 space-y-1">
+            <ul className="text-xs sm:text-sm text-red-800 list-disc pl-5 mt-3 space-y-1 max-w-[65ch]">
               <li>Nama lengkap wajib diisi minimal 3 karakter.</li>
-              <li>Nomor WhatsApp aktif wajib diisi untuk koordinasi kurir.</li>
-              <li>Perkiraan berat cucian tidak boleh 0 atau minus.</li>
+              <li>Nomor WhatsApp aktif wajib diawali 08 dan terdiri dari 10 hingga 15 digit.</li>
+              <li>Perkiraan berat cucian minimal 1 unit.</li>
             </ul>
           </div>
 
-          <div className="flex items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
             <button
               type="button"
               onClick={() => setGuestStep(3)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className={BTN_SECONDARY}
             >
               <ArrowLeft size={16} weight="bold" />
               <span>Kembali ke Layanan</span>
@@ -576,7 +748,7 @@ export default function PelangganTamuFlow() {
             <button
               type="button"
               onClick={() => setGuestStep(4)}
-              className="inline-flex items-center gap-2 bg-[#2562eb] hover:bg-blue-700 text-white font-bold text-xs sm:text-sm h-12 px-8 rounded-[10px] transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className={BTN_PRIMARY}
             >
               <span>Perbaiki Data Sekarang</span>
               <ArrowRight size={16} weight="bold" />
@@ -586,41 +758,49 @@ export default function PelangganTamuFlow() {
       )}
 
       {/* =========================================================================
-          SCREEN 06: ALAMAT MAP (Phase 3)
+          SCREEN 06: ALAMAT & PETA (Langkah 3 dari 4)
       ========================================================================== */}
       {guestStep === 6 && (
         <form
           onSubmit={addressForm.handleSubmit(onAddressValid)}
           noValidate
-          className="bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 shadow-sm flex flex-col gap-6"
+          className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)] flex flex-col gap-6"
         >
+          <StepContextHeader
+            stepNumber={3}
+            backLabel="Kembali ke Data Pesanan"
+            onBack={() => setGuestStep(4)}
+            title="Alamat & Lokasi Penjemputan"
+            description="Lengkapi alamat penjemputan dan patokan agar kurir cepat menemukan lokasi Anda."
+          />
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Map Simulator Panel */}
-            <div className="border border-[#e2e8f0] rounded-[14px] overflow-hidden flex flex-col">
-              <div className="bg-slate-100 p-3.5 border-b border-[#e2e8f0] flex items-center justify-between gap-2">
-                <span className="font-bold text-xs text-[#0f2342]">Pin Lokasi Penjemputan Kurir</span>
-                <span className="text-[11px] text-blue-700 bg-blue-100 px-2.5 py-0.5 rounded-full font-bold tabular-nums">
+            <div className="border border-[#e2e8f0] rounded-xl overflow-hidden flex flex-col bg-[#f8fafc]">
+              <div className="bg-[#f8fafc] px-4 py-3 border-b border-[#e2e8f0] flex items-center justify-between gap-2">
+                <span className="font-bold text-xs text-[#0f2342]">
+                  Pin Lokasi Penjemputan Kurir
+                </span>
+                <span className="text-[11px] text-[#2562eb] bg-[#eff6ff] border border-[#bfdbfe] px-2.5 py-0.5 rounded-full font-semibold tabular-nums">
                   Radius 2.4 km (Zona 2)
                 </span>
               </div>
-              <div className="bg-slate-200 h-64 relative flex items-center justify-center p-4">
-                {/* Visual Map Grid */}
-                <div className="absolute inset-0 opacity-30 bg-[radial-gradient(#2562eb_1px,transparent_1px)] [background-size:16px_16px]"></div>
+              <div className="bg-slate-200/80 h-60 relative flex items-center justify-center p-4">
+                <div className="absolute inset-0 opacity-30 bg-[radial-gradient(#2562eb_1px,transparent_1px)] [background-size:16px_16px]" />
+                <div className="absolute w-3/4 h-3 bg-white/75 rotate-12 rounded" />
+                <div className="absolute h-3/4 w-3 bg-white/75 -rotate-45 rounded" />
 
-                {/* Map Road paths */}
-                <div className="absolute w-3/4 h-3 bg-white/70 rotate-12 rounded"></div>
-                <div className="absolute h-3/4 w-3 bg-white/70 -rotate-45 rounded"></div>
-
-                {/* Pin */}
-                <div className="relative z-10 flex flex-col items-center animate-bounce max-w-full px-2">
-                  <div className="bg-[#2562eb] text-white text-[11px] font-bold px-2.5 py-1 rounded-md shadow-md mb-1 flex items-center gap-1.5 max-w-full truncate">
+                <div className="relative z-10 flex flex-col items-center max-w-full px-2">
+                  <div className="bg-[#2562eb] text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-sm mb-1.5 flex items-center gap-1.5 max-w-full truncate">
                     <MapPin size={14} weight="bold" className="shrink-0" />
-                    <span className="truncate">Titik Jemput: {watchedAddress || 'Jl. Soekarno Hatta No. 45'}</span>
+                    <span className="truncate">
+                      Titik Jemput: {watchedAddress || 'Jl. Soekarno Hatta No. 45'}
+                    </span>
                   </div>
-                  <div className="size-4 rounded-full bg-[#2562eb] ring-4 ring-blue-300"></div>
+                  <div className="size-3.5 rounded-full bg-[#2562eb] ring-4 ring-[#2562eb]/25" />
                 </div>
               </div>
-              <p className="p-3 text-[11px] text-[#64748b] bg-[#f8fafc]">
+              <p className="p-3.5 text-xs text-[#64748b] bg-[#f8fafc] border-t border-[#e2e8f0]">
                 Kurir akan diarahkan ke titik koordinat peta ini secara otomatis melalui aplikasi Kurir.
               </p>
             </div>
@@ -628,67 +808,75 @@ export default function PelangganTamuFlow() {
             {/* Address Form */}
             <div className="flex flex-col gap-4">
               <div>
-                <label className="block text-xs font-semibold text-[#0f2342] mb-1.5">
+                <label
+                  htmlFor="guest-address"
+                  className="block text-xs font-semibold text-[#0f2342] mb-1.5"
+                >
                   Alamat Lengkap Penjemputan
                 </label>
                 <textarea
+                  id="guest-address"
                   rows={3}
                   {...addressForm.register('address')}
                   placeholder="Nama jalan, nomor rumah, RT/RW, kelurahan..."
-                  className={`w-full bg-[#f8fafc] border rounded-[10px] px-3.5 py-2.5 text-sm text-[#0f2342] placeholder:text-slate-400 focus:outline-none focus:bg-white transition ${
+                  className={`${INPUT_BASE} ${
                     addressForm.formState.errors.address
                       ? 'border-red-400 focus:border-red-500'
-                      : 'border-[#cbd5e1] focus:border-[#2562eb]'
+                      : 'border-[#e2e8f0] focus:border-[#2562eb]'
                   }`}
                 />
                 {addressForm.formState.errors.address && (
-                  <p className="text-[11px] text-red-600 mt-1 font-medium">
+                  <p className="text-xs text-red-600 mt-1.5 font-medium">
                     {addressForm.formState.errors.address.message}
                   </p>
                 )}
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-[#0f2342] mb-1.5">
-                  Patokan / Landmark Lokasi
+                <label
+                  htmlFor="guest-landmark"
+                  className="block text-xs font-semibold text-[#0f2342] mb-1.5"
+                >
+                  Patokan / Landmark Lokasi (Opsional)
                 </label>
                 <input
+                  id="guest-landmark"
                   type="text"
                   {...addressForm.register('landmark')}
                   placeholder="Contoh: Depan warung Madura, pagar hijau..."
-                  className={`w-full bg-[#f8fafc] border rounded-[10px] px-3.5 py-2.5 text-sm text-[#0f2342] placeholder:text-slate-400 focus:outline-none focus:bg-white transition ${
+                  className={`${INPUT_BASE} ${
                     addressForm.formState.errors.landmark
                       ? 'border-red-400 focus:border-red-500'
-                      : 'border-[#cbd5e1] focus:border-[#2562eb]'
+                      : 'border-[#e2e8f0] focus:border-[#2562eb]'
                   }`}
                 />
                 {addressForm.formState.errors.landmark && (
-                  <p className="text-[11px] text-red-600 mt-1 font-medium">
+                  <p className="text-xs text-red-600 mt-1.5 font-medium">
                     {addressForm.formState.errors.landmark.message}
                   </p>
                 )}
               </div>
 
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-[#0f2342]">
-                <p className="font-bold text-[#2562eb]">Tarif Ongkos Kirim Terdeteksi:</p>
-                <p className="text-[#64748b] mt-1 tabular-nums">Zona 2 (3 - 7 km): <strong className="text-[#0f2342]">{formatRupiah(deliveryFee)}</strong> (Termasuk antar & jemput PP)</p>
+              <div className="bg-[#eff6ff]/70 border border-[#bfdbfe] rounded-xl p-4 text-xs text-[#0f2342]">
+                <p className="font-bold text-[#2562eb]">Tarif Ongkos Kirim Terdeteksi</p>
+                <p className="text-[#475569] mt-1 tabular-nums">
+                  Zona 2 (3 - 7 km):{' '}
+                  <strong className="text-[#0f2342]">{formatRupiah(deliveryFee)}</strong> (Termasuk antar & jemput PP)
+                </p>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
             <button
               type="button"
               onClick={() => setGuestStep(4)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className={BTN_SECONDARY}
             >
               <ArrowLeft size={16} weight="bold" />
               <span>Kembali ke Data Pesanan</span>
             </button>
-            <button
-              type="submit"
-              className="inline-flex items-center gap-2 bg-[#2562eb] hover:bg-blue-700 text-white font-bold text-xs sm:text-sm h-12 px-8 rounded-[10px] transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
-            >
+            <button type="submit" className={BTN_PRIMARY}>
               <span>Lanjutkan ke Estimasi Biaya</span>
               <ArrowRight size={16} weight="bold" />
             </button>
@@ -697,48 +885,79 @@ export default function PelangganTamuFlow() {
       )}
 
       {/* =========================================================================
-          SCREEN 07: ESTIMASI BIAYA (Phase 3)
+          SCREEN 07: ESTIMASI BIAYA (Langkah 3 dari 4)
       ========================================================================== */}
       {guestStep === 7 && (
-        <div className="bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 shadow-sm flex flex-col gap-6">
+        <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)] flex flex-col gap-6">
+          <StepContextHeader
+            stepNumber={3}
+            backLabel="Ubah Alamat / Titik Peta"
+            onBack={() => setGuestStep(6)}
+            title="Estimasi Biaya Pesanan"
+            description="Periksa kembali rincian biaya dan data penjemputan sebelum membuat pesanan."
+          />
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="border border-[#e2e8f0] rounded-[14px] p-5 sm:p-6 bg-[#f8fafc]">
-              <h4 className="font-bold text-[#0f2342] text-base mb-4">Rincian Perhitungan Biaya</h4>
+            <div className="border border-[#e2e8f0] rounded-xl p-4 sm:p-5 bg-[#f8fafc]">
+              <h2 className="font-bold text-[#0f2342] text-base mb-4">
+                Rincian Perhitungan Biaya
+              </h2>
               <div className="space-y-3 text-xs sm:text-sm">
                 <div className="flex justify-between items-center py-2 border-b border-[#e2e8f0] gap-2">
-                  <span className="text-[#64748b] tabular-nums">{activeService.name} · {safeWeight} {activeService.unit}</span>
-                  <span className="font-semibold text-[#0f2342] tabular-nums">{formatRupiah(serviceCost)}</span>
+                  <span className="text-[#475569] tabular-nums">
+                    {activeService.name} · {safeWeight} {activeService.unit}
+                  </span>
+                  <span className="font-semibold text-[#0f2342] tabular-nums">
+                    {formatRupiah(serviceCost)}
+                  </span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-[#e2e8f0] gap-2">
-                  <span className="text-[#64748b]">Ongkos Pickup & Delivery (PP)</span>
-                  <span className="font-semibold text-[#0f2342] tabular-nums">{formatRupiah(deliveryFee)}</span>
+                  <span className="text-[#475569]">Ongkos Pickup & Delivery (PP)</span>
+                  <span className="font-semibold text-[#0f2342] tabular-nums">
+                    {formatRupiah(deliveryFee)}
+                  </span>
                 </div>
                 <div className="flex justify-between items-center py-2 gap-2">
-                  <span className="text-[#64748b]">Diskon Promo</span>
-                  <span className="font-semibold text-emerald-600 tabular-nums">Rp0</span>
+                  <span className="text-[#475569]">Diskon Promo</span>
+                  <span className="font-semibold text-emerald-700 tabular-nums">Rp0</span>
                 </div>
               </div>
-              <p className="mt-4 text-[11px] text-[#64748b] italic">
-                * Total dapat disesuaikan kembali setelah kurir menimbang berat aktual di timbangan digital.
+              <p className="mt-4 text-xs text-[#64748b] max-w-[65ch]">
+                * Total dapat disesuaikan setelah kurir menimbang berat aktual dengan timbangan digital.
               </p>
             </div>
 
-            <div className="border border-blue-200 bg-blue-50/50 rounded-[14px] p-6 flex flex-col justify-between">
+            <div className="border border-[#bfdbfe] bg-[#eff6ff]/50 rounded-xl p-4 sm:p-5 flex flex-col justify-between gap-5">
               <div>
-                <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">Total Estimasi Tagihan</span>
-                <p className="text-3xl sm:text-4xl font-black text-[#2562eb] mt-1 tabular-nums">{formatRupiah(totalCost)}</p>
-                <div className="mt-4 space-y-1.5 text-xs text-[#64748b]">
-                  <p>• Pelanggan: <span className="font-bold text-[#0f2342]">{watchedCustomerName}</span></p>
-                  <p>• WhatsApp: <span className="font-bold text-[#0f2342] tabular-nums">{watchedPhone}</span></p>
-                  <p>• Alamat Jemput: <span className="font-bold text-[#0f2342]">{watchedAddress}</span></p>
-                </div>
+                <span className="text-xs font-semibold text-[#2562eb] uppercase tracking-wider">
+                  Total Estimasi Tagihan
+                </span>
+                <p className="text-3xl font-bold text-[#2562eb] mt-1 tabular-nums">
+                  {formatRupiah(totalCost)}
+                </p>
+                <dl className="mt-4 space-y-2 text-xs text-[#475569]">
+                  <div className="flex justify-between gap-3">
+                    <dt>Pelanggan</dt>
+                    <dd className="font-semibold text-[#0f2342] text-right">{watchedCustomerName}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt>WhatsApp</dt>
+                    <dd className="font-semibold text-[#0f2342] tabular-nums text-right">
+                      {watchedPhone}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="shrink-0">Alamat Jemput</dt>
+                    <dd className="font-semibold text-[#0f2342] text-right">{watchedAddress}</dd>
+                  </div>
+                </dl>
               </div>
 
-              <div className="mt-6 flex flex-col gap-2">
+              <div className="flex flex-col gap-2">
                 <button
                   type="button"
                   onClick={handleCreateOrder}
-                  className="bg-[#2562eb] hover:bg-blue-700 text-white font-bold text-sm h-12 px-6 rounded-[10px] transition text-center shadow-md flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+                  className={BTN_PRIMARY}
                 >
                   <span>Konfirmasi & Buat Pesanan</span>
                   <ArrowRight size={16} weight="bold" />
@@ -746,7 +965,7 @@ export default function PelangganTamuFlow() {
                 <button
                   type="button"
                   onClick={() => setGuestStep(6)}
-                  className="py-2 text-xs text-[#64748b] hover:text-[#0f2342] text-center inline-flex items-center justify-center gap-1.5 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 rounded"
+                  className={BTN_SECONDARY}
                 >
                   <ArrowLeft size={14} weight="bold" />
                   <span>Ubah Alamat / Titik Peta</span>
@@ -758,39 +977,86 @@ export default function PelangganTamuFlow() {
       )}
 
       {/* =========================================================================
-          SCREEN 08: NOMOR PESANAN (Phase 4)
+          SCREEN 08: NOMOR PESANAN (Langkah 4 dari 4)
       ========================================================================== */}
-      {guestStep === 8 && (
-        <div className="bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 shadow-sm flex flex-col gap-6">
-          <div className="bg-emerald-50 border border-emerald-200 rounded-[14px] p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <span className="text-xs font-bold text-emerald-700 uppercase tracking-wider bg-emerald-100 px-2.5 py-0.5 rounded-full">
-                Pesanan Berhasil Dibuat
+      {guestStep === 8 && currentOrder && (
+        <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)] flex flex-col gap-6">
+          <StepContextHeader
+            stepNumber={4}
+            backLabel="Lihat Ringkasan Estimasi"
+            onBack={() => setGuestStep(7)}
+            title="Pesanan Berhasil Dibuat"
+            description="Simpan kode pesanan ini untuk pelacakan status cucian di halaman Lacak Pesanan."
+          />
+
+          <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex flex-col gap-2">
+              <span className="inline-flex items-center gap-1.5 w-fit text-xs font-semibold text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full">
+                <CheckCircle size={14} weight="bold" />
+                <span>Kode Pesanan Aktif</span>
               </span>
-              <h3 className="text-3xl font-black text-[#0f2342] mt-2 tabular-nums">{currentOrder.id}</h3>
-              <p className="text-xs text-[#64748b] mt-1">
-                Simpan nomor pesanan ini untuk pelacakan status cucian di halaman Lacak.
-              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="text-2xl sm:text-3xl font-bold text-[#0f2342] tracking-tight tabular-nums">
+                  {currentOrder.id}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => handleCopy(currentOrder.id, 'order-8', 'Nomor pesanan')}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white hover:bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-[#0f2342] transition-all duration-150 ease-out cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+                >
+                  {copiedKey === 'order-8' ? (
+                    <>
+                      <Check size={14} weight="bold" className="text-emerald-600" />
+                      <span className="text-emerald-700">Tersalin</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={14} weight="bold" className="text-[#2562eb]" />
+                      <span>Salin Kode</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
-            <div className="bg-white px-4 py-2.5 rounded-xl border border-emerald-300 text-center shadow-xs">
-              <span className="text-[10px] text-slate-500 uppercase font-semibold">Status</span>
-              <p className="text-xs font-black text-amber-600">Menunggu Pembayaran</p>
+
+            <div className="bg-white px-4 py-2.5 rounded-xl border border-emerald-200 text-left sm:text-center shrink-0">
+              <span className="text-[11px] text-[#64748b] uppercase font-semibold block">
+                Status Saat Ini
+              </span>
+              <span className="text-xs font-bold text-amber-700">
+                {currentOrder.status.replace(/_/g, ' ')}
+              </span>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="border border-[#e2e8f0] rounded-[14px] p-5 sm:p-6 bg-[#f8fafc] text-xs sm:text-sm space-y-2.5">
-              <p className="font-bold text-[#0f2342] text-sm mb-2 border-b border-slate-200 pb-2">Detail Pesanan Anda:</p>
-              <p className="tabular-nums"><span className="text-[#64748b]">Layanan:</span> <strong className="text-[#0f2342]">{currentOrder.serviceName}</strong> ({currentOrder.weight} {currentOrder.unit})</p>
-              <p className="tabular-nums"><span className="text-[#64748b]">Waktu Buat:</span> {currentOrder.createdAt}</p>
-              <p className="tabular-nums"><span className="text-[#64748b]">Total Bayar:</span> <strong className="text-blue-600 text-base">{formatRupiah(currentOrder.total)}</strong></p>
+            <div className="border border-[#e2e8f0] rounded-xl p-4 sm:p-5 bg-[#f8fafc] text-xs sm:text-sm space-y-2.5">
+              <h2 className="font-bold text-[#0f2342] text-sm mb-2 border-b border-[#e2e8f0] pb-2">
+                Detail Pesanan Anda
+              </h2>
+              <p className="tabular-nums text-[#475569]">
+                Layanan:{' '}
+                <strong className="text-[#0f2342]">
+                  {currentOrder.serviceName}
+                </strong>{' '}
+                ({currentOrder.weight} {currentOrder.unit})
+              </p>
+              <p className="tabular-nums text-[#475569]">
+                Waktu Buat: <strong className="text-[#0f2342]">{currentOrder.createdAt}</strong>
+              </p>
+              <p className="tabular-nums text-[#475569]">
+                Total Bayar:{' '}
+                <strong className="text-[#2562eb] text-base">
+                  {formatRupiah(currentOrder.total)}
+                </strong>
+              </p>
             </div>
 
             <div className="flex flex-col justify-center gap-3">
               <button
                 type="button"
                 onClick={handleGoToPayment}
-                className="bg-[#2562eb] hover:bg-blue-700 text-white font-bold text-sm h-12 px-6 rounded-[10px] transition text-center shadow-sm flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98] tabular-nums"
+                className={`${BTN_PRIMARY} tabular-nums`}
               >
                 <span>Pilih Metode Pembayaran ({formatRupiah(currentOrder.total)})</span>
                 <ArrowRight size={16} weight="bold" />
@@ -798,59 +1064,49 @@ export default function PelangganTamuFlow() {
               <button
                 type="button"
                 onClick={() => setGuestStep(15)}
-                className="border border-[#cbd5e1] hover:bg-slate-50 text-[#0f2342] font-semibold text-xs h-10 px-4 rounded-[10px] transition text-center inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+                className={BTN_SECONDARY}
               >
                 <span>Lacak Status Cucian Sekarang</span>
-                <ArrowUpRight size={14} weight="bold" />
+                <ArrowUpRight size={15} weight="bold" />
               </button>
             </div>
-          </div>
-
-          <div className="flex items-center justify-between pt-4 border-t border-[#e2e8f0]">
-            <button
-              type="button"
-              onClick={() => setGuestStep(7)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
-            >
-              <ArrowLeft size={16} weight="bold" />
-              <span>Lihat Ringkasan Estimasi</span>
-            </button>
           </div>
         </div>
       )}
 
       {/* =========================================================================
-          SCREEN 09: METODE BAYAR (Phase 4)
+          SCREEN 09: METODE PEMBAYARAN (Langkah 4 dari 4)
       ========================================================================== */}
-      {guestStep === 9 && (
-        <div className="bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 shadow-sm flex flex-col gap-6">
-          <div>
-            <h3 className="text-xl font-bold text-[#0f2342]">Pilih Metode Pembayaran</h3>
-            <p className="text-xs sm:text-sm text-[#64748b] mt-0.5 tabular-nums">
-              Total tagihan pesanan <strong className="text-[#0f2342]">{currentOrder.id}</strong>: <strong className="text-blue-600">{formatRupiah(currentOrder.total)}</strong>
-            </p>
-          </div>
+      {guestStep === 9 && currentOrder && (
+        <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)] flex flex-col gap-6">
+          <StepContextHeader
+            stepNumber={4}
+            backLabel="Kembali ke Nomor Pesanan"
+            onBack={() => setGuestStep(8)}
+            title="Pilih Metode Pembayaran"
+            description={`Total tagihan pesanan ${currentOrder.id}: ${formatRupiah(currentOrder.total)}`}
+          />
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* QRIS */}
             <button
               type="button"
               onClick={() => handleSelectPaymentMethod('QRIS')}
-              className="w-full text-left border border-blue-200 bg-blue-50/40 hover:bg-blue-50/80 rounded-[14px] p-5 cursor-pointer transition flex flex-col justify-between h-44 shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className="w-full text-left group border border-[#e2e8f0] bg-[#f8fafc] hover:border-[#2562eb] hover:bg-[#eff6ff]/60 rounded-xl p-4 sm:p-5 cursor-pointer transition-all duration-150 ease-out flex flex-col justify-between min-h-[168px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
             >
               <div>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
+                  <span className="text-[11px] font-semibold text-[#2562eb] bg-[#eff6ff] border border-[#bfdbfe] px-2.5 py-0.5 rounded-full">
                     Rekomendasi
                   </span>
-                  <QrCode size={18} weight="bold" className="text-[#2562eb] shrink-0" />
+                  <QrCode size={20} weight="bold" className="text-[#2562eb] shrink-0" />
                 </div>
-                <h4 className="font-bold text-[#0f2342] text-base mt-2">QRIS Instant</h4>
+                <h2 className="font-bold text-[#0f2342] text-base mt-3">QRIS Instant</h2>
                 <p className="text-xs text-[#64748b] mt-1 leading-relaxed">
                   Scan via BCA, Mandiri, GoPay, OVO, ShopeePay, atau DANA secara otomatis.
                 </p>
               </div>
-              <span className="inline-flex items-center gap-1 text-xs font-bold text-[#2562eb]">
+              <span className="inline-flex items-center gap-1 text-xs font-bold text-[#2562eb] mt-4 pt-3 border-t border-[#e2e8f0] w-full">
                 <span>Pilih QRIS</span>
                 <ArrowRight size={14} weight="bold" />
               </span>
@@ -860,21 +1116,21 @@ export default function PelangganTamuFlow() {
             <button
               type="button"
               onClick={() => handleSelectPaymentMethod('TRANSFER')}
-              className="w-full text-left border border-[#e2e8f0] bg-[#f8fafc] hover:bg-slate-50 rounded-[14px] p-5 cursor-pointer transition flex flex-col justify-between h-44 shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className="w-full text-left group border border-[#e2e8f0] bg-[#f8fafc] hover:border-[#2562eb] hover:bg-[#eff6ff]/60 rounded-xl p-4 sm:p-5 cursor-pointer transition-all duration-150 ease-out flex flex-col justify-between min-h-[168px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
             >
               <div>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[10px] font-bold text-slate-500 bg-slate-200 px-2 py-0.5 rounded-full">
+                  <span className="text-[11px] font-semibold text-[#475569] bg-white border border-[#e2e8f0] px-2.5 py-0.5 rounded-full">
                     Manual
                   </span>
-                  <Bank size={18} weight="regular" className="text-[#0f2342] shrink-0" />
+                  <Bank size={20} weight="regular" className="text-[#0f2342] shrink-0" />
                 </div>
-                <h4 className="font-bold text-[#0f2342] text-base mt-2">Transfer Bank</h4>
+                <h2 className="font-bold text-[#0f2342] text-base mt-3">Transfer Bank</h2>
                 <p className="text-xs text-[#64748b] mt-1 leading-relaxed">
                   Transfer ke rekening resmi BCA/Mandiri lalu upload foto struk bukti bayar.
                 </p>
               </div>
-              <span className="inline-flex items-center gap-1 text-xs font-bold text-[#2562eb]">
+              <span className="inline-flex items-center gap-1 text-xs font-bold text-[#2562eb] mt-4 pt-3 border-t border-[#e2e8f0] w-full">
                 <span>Pilih Transfer</span>
                 <ArrowRight size={14} weight="bold" />
               </span>
@@ -884,111 +1140,133 @@ export default function PelangganTamuFlow() {
             <button
               type="button"
               onClick={() => handleSelectPaymentMethod('COD')}
-              className="w-full text-left border border-[#e2e8f0] bg-[#f8fafc] hover:bg-slate-50 rounded-[14px] p-5 cursor-pointer transition flex flex-col justify-between h-44 shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className="w-full text-left group border border-[#e2e8f0] bg-[#f8fafc] hover:border-[#2562eb] hover:bg-[#eff6ff]/60 rounded-xl p-4 sm:p-5 cursor-pointer transition-all duration-150 ease-out flex flex-col justify-between min-h-[168px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
             >
               <div>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[10px] font-bold text-slate-500 bg-slate-200 px-2 py-0.5 rounded-full">
+                  <span className="text-[11px] font-semibold text-[#475569] bg-white border border-[#e2e8f0] px-2.5 py-0.5 rounded-full">
                     Tunai
                   </span>
-                  <Money size={18} weight="regular" className="text-[#0f2342] shrink-0" />
+                  <Money size={20} weight="regular" className="text-[#0f2342] shrink-0" />
                 </div>
-                <h4 className="font-bold text-[#0f2342] text-base mt-2">Bayar Saat Pickup</h4>
+                <h2 className="font-bold text-[#0f2342] text-base mt-3">Bayar Saat Pickup</h2>
                 <p className="text-xs text-[#64748b] mt-1 leading-relaxed">
-                  Bayar tunai kepada kurir saat pakaian dijemput di lokasi Anda.
+                  Bayar tunai langsung kepada kurir saat pakaian dijemput di lokasi Anda.
                 </p>
               </div>
-              <span className="inline-flex items-center gap-1 text-xs font-bold text-[#2562eb]">
+              <span className="inline-flex items-center gap-1 text-xs font-bold text-[#2562eb] mt-4 pt-3 border-t border-[#e2e8f0] w-full">
                 <span>Pilih Tunai COD</span>
                 <ArrowRight size={14} weight="bold" />
               </span>
             </button>
           </div>
 
-          <div className="flex items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
             <button
               type="button"
               onClick={() => setGuestStep(8)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className={BTN_SECONDARY}
             >
               <ArrowLeft size={16} weight="bold" />
               <span>Kembali ke Nomor Pesanan</span>
             </button>
-            <span className="text-xs text-[#64748b] tabular-nums">Total Tagihan: <strong className="text-[#0f2342]">{formatRupiah(currentOrder.total)}</strong></span>
+            <span className="text-xs text-[#475569] tabular-nums text-right">
+              Total Tagihan:{' '}
+              <strong className="text-[#0f2342] text-sm">
+                {formatRupiah(currentOrder.total)}
+              </strong>
+            </span>
           </div>
         </div>
       )}
 
       {/* =========================================================================
-          SCREEN 10: QRIS (Phase 4)
+          SCREEN 10: PEMBAYARAN QRIS (Langkah 4 dari 4)
       ========================================================================== */}
-      {guestStep === 10 && (
-        <div className="bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 shadow-sm flex flex-col gap-6">
+      {guestStep === 10 && currentOrder && (
+        <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)] flex flex-col gap-6">
+          <StepContextHeader
+            stepNumber={4}
+            backLabel="Ganti Metode Pembayaran"
+            onBack={() => setGuestStep(9)}
+            title="Pembayaran QRIS"
+            description="Scan kode QR di bawah menggunakan aplikasi m-Banking atau e-Wallet Anda."
+          />
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* QR Code Container */}
-            <div className="border border-[#e2e8f0] rounded-[14px] p-6 bg-[#f8fafc] flex flex-col items-center justify-center">
-              <span className="text-xs font-bold text-[#64748b] mb-3">QRIS Iqbal Laundry Standar BI</span>
+            <div className="border border-[#e2e8f0] rounded-xl p-5 bg-[#f8fafc] flex flex-col items-center justify-center">
+              <span className="text-xs font-semibold text-[#475569] mb-3">
+                QRIS Iqbal Laundry Standar BI
+              </span>
 
-              {/* Simulated QR Box */}
-              <div className="bg-white p-4 rounded-xl border border-slate-300 shadow-sm flex flex-col items-center">
-                <div className="size-48 bg-slate-900 rounded-lg p-2 flex flex-col justify-between relative">
+              <div className="bg-white p-4 rounded-xl border border-[#e2e8f0] shadow-xs flex flex-col items-center">
+                <div className="size-48 bg-[#0f2342] rounded-lg p-2.5 flex flex-col justify-between relative">
                   <div className="flex justify-between">
                     <div className="size-10 bg-white rounded flex items-center justify-center">
-                      <div className="size-6 bg-slate-900 rounded-sm"></div>
+                      <div className="size-6 bg-[#0f2342] rounded-sm" />
                     </div>
                     <div className="size-10 bg-white rounded flex items-center justify-center">
-                      <div className="size-6 bg-slate-900 rounded-sm"></div>
+                      <div className="size-6 bg-[#0f2342] rounded-sm" />
                     </div>
                   </div>
                   <div className="flex justify-center my-2">
-                    <div className="bg-blue-600 text-[10px] text-white font-bold px-2 py-0.5 rounded">
+                    <div className="bg-[#2562eb] text-[10px] text-white font-bold px-2.5 py-0.5 rounded">
                       QRIS
                     </div>
                   </div>
                   <div className="flex justify-between">
                     <div className="size-10 bg-white rounded flex items-center justify-center">
-                      <div className="size-6 bg-slate-900 rounded-sm"></div>
+                      <div className="size-6 bg-[#0f2342] rounded-sm" />
                     </div>
-                    <div className="size-8 bg-white/70 rounded grid grid-cols-2 gap-1 p-1">
-                      <div className="bg-black"></div>
-                      <div className="bg-black"></div>
-                      <div className="bg-black"></div>
+                    <div className="size-8 bg-white/80 rounded grid grid-cols-2 gap-1 p-1">
+                      <div className="bg-[#0f2342]" />
+                      <div className="bg-[#0f2342]" />
+                      <div className="bg-[#0f2342]" />
                     </div>
                   </div>
                 </div>
-                <p className="mt-3 text-xs font-bold text-[#0f2342] tabular-nums">NMID: ID1020304050607</p>
+                <p className="mt-3 text-xs font-bold text-[#0f2342] tabular-nums">
+                  NMID: ID1020304050607
+                </p>
               </div>
 
-              <div className="mt-4 flex items-center gap-2 text-xs text-amber-700 bg-amber-50 px-3.5 py-1.5 rounded-full border border-amber-200">
-                <Clock size={16} weight="bold" className="shrink-0" />
-                <span className="tabular-nums">Batas bayar: 14 menit 59 detik</span>
+              <div className="mt-4 flex items-center gap-2 text-xs text-amber-800 bg-amber-50 px-3.5 py-1.5 rounded-full border border-amber-200">
+                <Clock size={15} weight="bold" className="shrink-0" />
+                <span className="tabular-nums font-medium">Batas bayar: 14 menit 59 detik</span>
               </div>
             </div>
 
             {/* Payment Details */}
-            <div className="flex flex-col justify-between">
+            <div className="flex flex-col justify-between gap-5">
               <div>
-                <h4 className="font-bold text-[#0f2342] text-base mb-3 border-b border-[#e2e8f0] pb-2">
+                <h2 className="font-bold text-[#0f2342] text-base mb-3 border-b border-[#e2e8f0] pb-2">
                   Detail Pembayaran QRIS
-                </h4>
+                </h2>
                 <div className="space-y-2.5 text-xs sm:text-sm">
                   <div className="flex justify-between gap-2">
-                    <span className="text-[#64748b]">Nomor Pesanan:</span>
-                    <span className="font-bold text-[#0f2342] tabular-nums">{currentOrder.id}</span>
+                    <span className="text-[#475569]">Nomor Pesanan</span>
+                    <span className="font-bold text-[#0f2342] tabular-nums">
+                      {currentOrder.id}
+                    </span>
                   </div>
                   <div className="flex justify-between gap-2">
-                    <span className="text-[#64748b]">Layanan:</span>
-                    <span className="tabular-nums">{currentOrder.serviceName} ({currentOrder.weight} {currentOrder.unit})</span>
+                    <span className="text-[#475569]">Layanan</span>
+                    <span className="text-[#0f2342] font-medium tabular-nums">
+                      {currentOrder.serviceName} ({currentOrder.weight} {currentOrder.unit})
+                    </span>
                   </div>
-                  <div className="flex justify-between items-center pt-1 gap-2">
-                    <span className="text-[#64748b]">Total Pembayaran:</span>
-                    <span className="text-2xl font-black text-[#2562eb] tabular-nums">{formatRupiah(currentOrder.total)}</span>
+                  <div className="flex justify-between items-center pt-2 border-t border-[#e2e8f0] gap-2">
+                    <span className="font-semibold text-[#0f2342]">Total Pembayaran</span>
+                    <span className="text-2xl font-bold text-[#2562eb] tabular-nums">
+                      {formatRupiah(currentOrder.total)}
+                    </span>
                   </div>
                 </div>
 
-                <div className="mt-5 p-4 bg-blue-50 border border-blue-200 rounded-xl text-xs text-[#0f2342]">
-                  <p className="font-bold text-[#2562eb]">Instruksi Pembayaran:</p>
-                  <ol className="list-decimal pl-4 mt-1.5 text-[11px] text-[#64748b] space-y-1">
+                <div className="mt-5 p-4 bg-[#f8fafc] border border-[#e2e8f0] rounded-xl text-xs text-[#0f2342]">
+                  <p className="font-bold text-[#0f2342]">Instruksi Pembayaran</p>
+                  <ol className="list-decimal pl-4 mt-2 text-xs text-[#475569] space-y-1 max-w-[65ch]">
                     <li>Buka aplikasi m-Banking atau e-Wallet favorit Anda.</li>
                     <li>Pilih menu <strong>Scan / Bayar QRIS</strong>.</li>
                     <li>Arahkan kamera ke kode QR di samping.</li>
@@ -998,11 +1276,11 @@ export default function PelangganTamuFlow() {
                 </div>
               </div>
 
-              <div className="flex flex-col sm:flex-row gap-3 mt-6">
+              <div className="flex flex-col sm:flex-row gap-3">
                 <button
                   type="button"
                   onClick={handlePaymentSuccess}
-                  className="flex-1 inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm h-11 px-5 rounded-[10px] transition text-center shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+                  className="flex-1 inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs sm:text-sm h-11 px-5 rounded-lg transition-all duration-150 ease-out shadow-xs whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
                 >
                   <CheckCircle size={18} weight="bold" />
                   <span>Konfirmasi Pembayaran</span>
@@ -1010,7 +1288,7 @@ export default function PelangganTamuFlow() {
                 <button
                   type="button"
                   onClick={handlePaymentFailed}
-                  className="inline-flex items-center justify-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-semibold text-xs sm:text-sm h-11 px-4 rounded-[10px] transition whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+                  className="inline-flex items-center justify-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-semibold text-xs sm:text-sm h-11 px-4 rounded-lg transition-all duration-150 ease-out whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
                 >
                   <XCircle size={16} weight="bold" />
                   <span>Batalkan Pembayaran</span>
@@ -1018,38 +1296,37 @@ export default function PelangganTamuFlow() {
               </div>
             </div>
           </div>
-
-          <div className="flex items-center justify-between pt-4 border-t border-[#e2e8f0]">
-            <button
-              type="button"
-              onClick={() => setGuestStep(9)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
-            >
-              <ArrowLeft size={16} weight="bold" />
-              <span>Ganti Metode Pembayaran</span>
-            </button>
-          </div>
         </div>
       )}
 
       {/* =========================================================================
-          SCREEN 11: GAGAL BAYAR (Phase 4)
+          SCREEN 11: GAGAL BAYAR (Langkah 4 dari 4)
       ========================================================================== */}
-      {guestStep === 11 && (
-        <div className="bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 shadow-sm flex flex-col gap-6">
-          <div className="bg-red-50 border border-red-200 rounded-[14px] p-6 text-center">
-            <XCircle size={40} weight="regular" className="text-red-500 mx-auto" />
-            <h3 className="text-xl font-bold text-red-900 mt-2">Pembayaran Belum Berhasil</h3>
-            <p className="text-xs sm:text-sm text-red-700 mt-1 max-w-md mx-auto tabular-nums">
+      {guestStep === 11 && currentOrder && (
+        <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)] flex flex-col gap-6">
+          <StepContextHeader
+            stepNumber={4}
+            backLabel="Kembali ke Metode Pembayaran"
+            onBack={() => setGuestStep(9)}
+            title="Pembayaran Belum Berhasil"
+            description="Pesanan Anda tetap tersimpan dan Anda dapat mencoba metode pembayaran lain."
+          />
+
+          <div className="bg-red-50 border border-red-200 rounded-xl p-5 sm:p-6 text-center flex flex-col items-center">
+            <XCircle size={40} weight="regular" className="text-red-500" />
+            <h2 className="text-lg font-bold text-red-900 mt-2.5">
+              Transaksi Dibatalkan atau Kedaluwarsa
+            </h2>
+            <p className="text-xs sm:text-sm text-red-700 mt-1 max-w-[65ch] tabular-nums">
               Transaksi tidak dapat diproses atau waktu pembayaran telah habis. Pesanan Anda ({currentOrder.id}) tetap tersimpan aman di sistem.
             </p>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-3">
             <button
               type="button"
               onClick={() => setGuestStep(10)}
-              className="inline-flex items-center gap-2 bg-[#2562eb] hover:bg-blue-700 text-white font-bold text-xs sm:text-sm h-11 px-6 rounded-[10px] transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className={BTN_PRIMARY}
             >
               <span>Coba QRIS Kembali</span>
               <ArrowRight size={16} weight="bold" />
@@ -1057,59 +1334,95 @@ export default function PelangganTamuFlow() {
             <button
               type="button"
               onClick={() => setGuestStep(9)}
-              className="inline-flex items-center gap-2 border border-[#cbd5e1] hover:bg-slate-50 text-[#0f2342] font-semibold text-xs sm:text-sm h-11 px-6 rounded-[10px] transition whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className={BTN_SECONDARY}
             >
               <span>Ganti Metode Pembayaran</span>
-            </button>
-          </div>
-
-          <div className="flex items-center justify-between pt-4 border-t border-[#e2e8f0]">
-            <button
-              type="button"
-              onClick={() => setGuestStep(8)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
-            >
-              <ArrowLeft size={16} weight="bold" />
-              <span>Kembali ke Nomor Pesanan</span>
             </button>
           </div>
         </div>
       )}
 
       {/* =========================================================================
-          SCREEN 12: BUKTI BAYAR (Phase 4)
+          SCREEN 12: UPLOAD BUKTI BAYAR TRANSFER (Langkah 4 dari 4)
       ========================================================================== */}
-      {guestStep === 12 && (
-        <div className="bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 shadow-sm flex flex-col gap-6">
-          <div className="border border-[#e2e8f0] rounded-[14px] p-5 sm:p-6 bg-[#f8fafc]">
-            <h4 className="font-bold text-[#0f2342] text-sm mb-3">Rekening Resmi Transfer Iqbal Laundry</h4>
+      {guestStep === 12 && currentOrder && (
+        <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)] flex flex-col gap-6">
+          <StepContextHeader
+            stepNumber={4}
+            backLabel="Ganti Metode Pembayaran"
+            onBack={() => setGuestStep(9)}
+            title="Transfer Bank & Upload Bukti"
+            description={`Transfer sesuai nominal ${formatRupiah(currentOrder.total)} ke rekening resmi di bawah, lalu unggah bukti transfer.`}
+          />
+
+          <div className="border border-[#e2e8f0] rounded-xl p-4 sm:p-5 bg-[#f8fafc]">
+            <h2 className="font-bold text-[#0f2342] text-sm mb-3">
+              Rekening Resmi Transfer Iqbal Laundry
+            </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-                <span className="text-[10px] text-blue-600 font-bold uppercase tracking-wider">BCA</span>
-                <p className="font-mono text-lg font-bold text-[#0f2342] mt-0.5 tabular-nums">8830-1928-44</p>
-                <p className="text-[11px] text-slate-500">a.n. Iqbal Maulana Laundry</p>
+              <div className="bg-white p-4 rounded-xl border border-[#e2e8f0] flex items-center justify-between gap-3">
+                <div>
+                  <span className="text-[11px] text-[#2562eb] font-bold uppercase tracking-wider">
+                    BCA
+                  </span>
+                  <p className="font-mono text-base sm:text-lg font-bold text-[#0f2342] mt-0.5 tabular-nums">
+                    8830-1928-44
+                  </p>
+                  <p className="text-[11px] text-[#64748b]">a.n. Iqbal Maulana Laundry</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleCopy('8830192844', 'bca', 'Nomor rekening BCA')}
+                  className="inline-flex items-center gap-1 rounded-lg border border-[#e2e8f0] bg-[#f8fafc] hover:border-[#2562eb] hover:bg-[#eff6ff]/60 px-2.5 py-1.5 text-xs font-semibold text-[#0f2342] transition-all duration-150 ease-out shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+                >
+                  {copiedKey === 'bca' ? (
+                    <Check size={14} weight="bold" className="text-emerald-600" />
+                  ) : (
+                    <Copy size={14} weight="bold" className="text-[#2562eb]" />
+                  )}
+                  <span>{copiedKey === 'bca' ? 'Tersalin' : 'Salin'}</span>
+                </button>
               </div>
-              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-                <span className="text-[10px] text-blue-800 font-bold uppercase tracking-wider">Mandiri</span>
-                <p className="font-mono text-lg font-bold text-[#0f2342] mt-0.5 tabular-nums">132-00-9876543-1</p>
-                <p className="text-[11px] text-slate-500">a.n. Iqbal Maulana Laundry</p>
+
+              <div className="bg-white p-4 rounded-xl border border-[#e2e8f0] flex items-center justify-between gap-3">
+                <div>
+                  <span className="text-[11px] text-[#0f2342] font-bold uppercase tracking-wider">
+                    Mandiri
+                  </span>
+                  <p className="font-mono text-base sm:text-lg font-bold text-[#0f2342] mt-0.5 tabular-nums">
+                    132-00-9876543-1
+                  </p>
+                  <p className="text-[11px] text-[#64748b]">a.n. Iqbal Maulana Laundry</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleCopy('1320098765431', 'mandiri', 'Nomor rekening Mandiri')}
+                  className="inline-flex items-center gap-1 rounded-lg border border-[#e2e8f0] bg-[#f8fafc] hover:border-[#2562eb] hover:bg-[#eff6ff]/60 px-2.5 py-1.5 text-xs font-semibold text-[#0f2342] transition-all duration-150 ease-out shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+                >
+                  {copiedKey === 'mandiri' ? (
+                    <Check size={14} weight="bold" className="text-emerald-600" />
+                  ) : (
+                    <Copy size={14} weight="bold" className="text-[#2562eb]" />
+                  )}
+                  <span>{copiedKey === 'mandiri' ? 'Tersalin' : 'Salin'}</span>
+                </button>
               </div>
             </div>
           </div>
 
           {/* Upload Area */}
-          <div className="border-2 border-dashed border-blue-300 rounded-[14px] p-6 text-center bg-blue-50/20">
+          <div className="border-2 border-dashed border-[#bfdbfe] rounded-xl p-5 sm:p-6 text-center bg-[#eff6ff]/30">
             {uploadedProof ? (
               <div className="flex flex-col items-center">
                 <div className="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-800 px-3.5 py-1 rounded-full text-xs font-semibold mb-2">
                   <CheckCircle size={16} weight="bold" />
                   <span>File Bukti Siap Dikirim</span>
                 </div>
-                <p className="text-xs text-slate-600 font-medium">{uploadedProof}</p>
+                <p className="text-xs sm:text-sm text-[#0f2342] font-semibold">{uploadedProof}</p>
                 <button
                   type="button"
                   onClick={() => setUploadedProof(null)}
-                  className="mt-2 text-xs text-red-600 hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 rounded"
+                  className="mt-2.5 text-xs font-semibold text-red-600 hover:underline px-2 py-1 rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
                 >
                   Ganti File
                 </button>
@@ -1117,7 +1430,9 @@ export default function PelangganTamuFlow() {
             ) : (
               <div>
                 <p className="text-sm font-bold text-[#0f2342]">Upload Foto Bukti Struk Transfer</p>
-                <p className="text-xs text-[#64748b] mt-1">Format JPG, PNG atau PDF (Maks. 5MB)</p>
+                <p className="text-xs text-[#64748b] mt-1">
+                  Format JPG, PNG, atau PDF (Maksimal 5MB)
+                </p>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -1125,11 +1440,11 @@ export default function PelangganTamuFlow() {
                   onChange={handleFileChange}
                   className="hidden"
                 />
-                <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                <div className="mt-4 flex flex-wrap items-center justify-center gap-2.5">
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="inline-flex items-center gap-1.5 bg-white border border-[#cbd5e1] hover:bg-slate-50 text-xs font-bold text-[#2562eb] px-4 py-2 rounded-lg transition shadow-xs whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+                    className="inline-flex items-center gap-1.5 bg-white border border-[#e2e8f0] hover:border-[#2562eb] hover:bg-[#eff6ff]/60 text-xs font-semibold text-[#2562eb] px-4 py-2 rounded-lg transition-all duration-150 ease-out shadow-xs whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
                   >
                     <UploadSimple size={16} weight="bold" />
                     <span>Pilih Foto dari Perangkat</span>
@@ -1141,7 +1456,7 @@ export default function PelangganTamuFlow() {
                       setUploadedProof(sampleName);
                       showToast(`Bukti contoh "${sampleName}" dipilih.`, 'info');
                     }}
-                    className="bg-blue-50 border border-blue-200 hover:bg-blue-100 text-xs font-semibold text-[#2562eb] px-3 py-2 rounded-lg transition whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+                    className="bg-[#eff6ff] border border-[#bfdbfe] hover:bg-blue-100 text-xs font-semibold text-[#2562eb] px-3.5 py-2 rounded-lg transition-all duration-150 ease-out whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
                   >
                     Gunakan Contoh Struk
                   </button>
@@ -1150,11 +1465,11 @@ export default function PelangganTamuFlow() {
             )}
           </div>
 
-          <div className="flex items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
             <button
               type="button"
               onClick={() => setGuestStep(9)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className={BTN_SECONDARY}
             >
               <ArrowLeft size={16} weight="bold" />
               <span>Ganti Metode Pembayaran</span>
@@ -1162,11 +1477,15 @@ export default function PelangganTamuFlow() {
             <button
               type="button"
               onClick={() => {
-                confirmPayment(currentOrder.id, 'TRANSFER', uploadedProof || 'bukti-pembayaran-terverifikasi.jpg');
+                confirmPayment(
+                  currentOrder.id,
+                  'TRANSFER',
+                  uploadedProof || 'bukti-pembayaran-terverifikasi.jpg'
+                );
                 showToast(`Bukti transfer untuk ${currentOrder.id} berhasil dikirim.`, 'success');
                 setGuestStep(15);
               }}
-              className="inline-flex items-center gap-2 bg-[#2562eb] hover:bg-blue-700 text-white font-bold text-xs sm:text-sm h-12 px-8 rounded-[10px] transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className={BTN_PRIMARY}
             >
               <span>Kirim Konfirmasi Pembayaran</span>
               <ArrowRight size={16} weight="bold" />
@@ -1176,106 +1495,146 @@ export default function PelangganTamuFlow() {
       )}
 
       {/* =========================================================================
-          SCREEN 13: STATUS KOSONG (Phase 5)
+          SCREEN 13: STATUS KOSONG
       ========================================================================== */}
       {guestStep === 13 && (
-        <div className="bg-white border border-[#dce5f0] rounded-[16px] p-10 sm:p-14 shadow-sm text-center flex flex-col items-center justify-center">
-          <div className="size-16 rounded-full bg-slate-100 flex items-center justify-center mb-4">
-            <Basket size={28} weight="regular" className="text-[#2562eb]" />
-          </div>
-          <h3 className="text-xl font-bold text-[#0f2342]">Belum Ada Pesanan Aktif</h3>
-          <p className="text-xs sm:text-sm text-[#64748b] mt-1.5 max-w-sm">
-            Anda belum memiliki pesanan aktif saat ini. Buat pesanan baru atau daftar akun member untuk kemudahan reorder.
-          </p>
-          <div className="mt-6 flex flex-col sm:flex-row gap-3">
-            <button
-              type="button"
-              onClick={() => setGuestStep(1)}
-              className="inline-flex items-center justify-center gap-2 bg-[#2562eb] hover:bg-blue-700 text-white font-bold text-xs sm:text-sm h-11 px-6 rounded-[10px] transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
-            >
-              <Plus size={16} weight="bold" />
-              <span>Buat Pesanan Baru</span>
-              <ArrowRight size={16} weight="bold" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setGuestStep(14)}
-              className="inline-flex items-center justify-center gap-2 border border-[#cbd5e1] text-[#0f2342] text-xs sm:text-sm font-semibold h-11 px-5 rounded-[10px] hover:bg-slate-50 transition whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
-            >
-              <span>Lihat Riwayat Pesanan</span>
-            </button>
+        <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)] flex flex-col gap-6">
+          <StepContextHeader
+            backLabel="Kembali ke Layanan"
+            onBack={() => setGuestStep(1)}
+            title="Lacak Pesanan Laundry"
+            description="Pantau status cucian Anda secara real-time di sini."
+          />
+
+          <div className="py-8 px-4 text-center flex flex-col items-center justify-center">
+            <div className="size-16 rounded-full bg-[#f8fafc] border border-[#e2e8f0] flex items-center justify-center mb-4">
+              <Basket size={28} weight="regular" className="text-[#2562eb]" />
+            </div>
+            <h2 className="text-lg font-bold text-[#0f2342]">Belum Ada Pesanan Aktif</h2>
+            <p className="text-xs sm:text-sm text-[#475569] mt-1.5 max-w-[65ch]">
+              Anda belum memiliki pesanan aktif saat ini. Buat pesanan baru atau lihat riwayat pesanan yang pernah tercatat.
+            </p>
+            <div className="mt-6 flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => setGuestStep(1)}
+                className={BTN_PRIMARY}
+              >
+                <Plus size={16} weight="bold" />
+                <span>Buat Pesanan Baru</span>
+                <ArrowRight size={16} weight="bold" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setGuestStep(14)}
+                className={BTN_SECONDARY}
+              >
+                <span>Lihat Riwayat Pesanan</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {/* =========================================================================
-          SCREEN 14: DAFTAR STATUS (Phase 5)
+          SCREEN 14: DAFTAR PESANAN LAUNDRY
       ========================================================================== */}
       {guestStep === 14 && (
-        <div className="bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 shadow-sm flex flex-col gap-5">
-          <div className="flex items-center justify-between gap-2 border-b border-[#e2e8f0] pb-3">
-            <div>
-              <h4 className="font-bold text-[#0f2342] text-lg">Daftar Pesanan Laundry</h4>
-              <p className="text-xs text-[#64748b]">Klik salah satu pesanan untuk memantau progress pengerjaan.</p>
-            </div>
-            <span className="text-xs font-semibold text-[#2562eb] bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100 tabular-nums shrink-0">
-              {orders.length} Transaksi Tercatat
-            </span>
+        <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)] flex flex-col gap-5">
+          <StepContextHeader
+            backLabel="Kembali ke Layanan"
+            onBack={() => setGuestStep(1)}
+            title="Lacak & Daftar Pesanan"
+            description="Pilih atau cari kode pesanan Anda untuk memantau progress pengerjaan cucian."
+            rightBadge={
+              <span className="text-xs font-semibold text-[#2562eb] bg-[#eff6ff] px-2.5 py-0.5 rounded-full border border-[#bfdbfe] tabular-nums shrink-0">
+                {orders.length} Transaksi
+              </span>
+            }
+          />
+
+          <div className="relative">
+            <label htmlFor="guest-order-search" className="sr-only">
+              Cari nomor pesanan atau nama pelanggan
+            </label>
+            <MagnifyingGlass
+              size={16}
+              weight="bold"
+              className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#64748b] pointer-events-none"
+            />
+            <input
+              id="guest-order-search"
+              type="text"
+              value={orderSearch}
+              onChange={(e) => setOrderSearch(e.target.value)}
+              placeholder="Cari kode pesanan (contoh: IL-1024) atau nama pelanggan..."
+              className={`${INPUT_BASE} pl-10 border-[#e2e8f0] focus:border-[#2562eb]`}
+            />
           </div>
 
-          <div className="space-y-3">
-            {orders.map((ord) => (
+          {filteredOrders.length === 0 ? (
+            <div className="border border-[#e2e8f0] rounded-xl bg-[#f8fafc] p-6 text-center flex flex-col items-center gap-3">
+              <p className="text-sm font-semibold text-[#0f2342]">
+                Pesanan tidak ditemukan
+              </p>
+              <p className="text-xs text-[#64748b] max-w-[65ch]">
+                Tidak ada pesanan yang cocok dengan kata kunci pencarian Anda.
+              </p>
               <button
-                key={ord.id}
                 type="button"
-                onClick={() => {
-                  setActiveOrderId(ord.id);
-                  setGuestStep(15);
-                }}
-                className={`w-full text-left border rounded-[14px] p-4 sm:p-5 cursor-pointer transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98] ${
-                  ord.id === activeOrderId
-                    ? 'border-blue-300 bg-blue-50/50 shadow-xs'
-                    : 'border-[#e2e8f0] bg-[#f8fafc] hover:bg-slate-50'
-                }`}
+                onClick={() => setOrderSearch('')}
+                className={BTN_SECONDARY}
               >
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-[#0f2342] text-base tabular-nums">{ord.id}</span>
-                    <span className="text-xs text-[#64748b]">· {ord.customerName}</span>
-                  </div>
-                  <p className="text-xs text-[#64748b] mt-0.5 tabular-nums">
-                    {ord.serviceName} · {ord.weight} {ord.unit} · {formatRupiah(ord.total)}
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-4 justify-between sm:justify-end">
-                  <span
-                    className={`text-xs px-3 py-1 rounded-full font-bold ${
-                      ord.status === 'SELESAI'
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : ord.status === 'DICUCI'
-                        ? 'bg-sky-100 text-sky-800'
-                        : ord.status === 'DITERIMA'
-                        ? 'bg-blue-100 text-blue-800'
-                        : 'bg-amber-100 text-amber-800'
-                    }`}
-                  >
-                    {ord.status.replace('_', ' ')}
-                  </span>
-                  <span className="inline-flex items-center gap-1 font-bold text-xs text-[#2562eb]">
-                    <span>Lihat Tracking Detail</span>
-                    <ArrowRight size={14} weight="bold" />
-                  </span>
-                </div>
+                <span>Tampilkan Semua Pesanan</span>
               </button>
-            ))}
-          </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {filteredOrders.map((ord) => (
+                <button
+                  key={ord.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveOrderId(ord.id);
+                    setGuestStep(15);
+                  }}
+                  className="w-full text-left border border-[#e2e8f0] bg-[#f8fafc] hover:border-[#2562eb] hover:bg-[#eff6ff]/60 rounded-xl p-4 sm:p-5 cursor-pointer transition-all duration-150 ease-out flex flex-col sm:flex-row sm:items-center justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+                >
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-bold text-[#0f2342] text-base tabular-nums">
+                        {ord.id}
+                      </span>
+                      <span className="text-xs text-[#475569]">· {ord.customerName}</span>
+                    </div>
+                    <p className="text-xs text-[#64748b] mt-1 tabular-nums">
+                      {ord.serviceName} · {ord.weight} {ord.unit} · {formatRupiah(ord.total)}
+                    </p>
+                  </div>
 
-          <div className="flex items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
+                  <div className="flex items-center gap-3 justify-between sm:justify-end">
+                    <span
+                      className={`text-xs px-3 py-1 rounded-full font-semibold ${getOrderStatusStyle(
+                        ord.status
+                      )}`}
+                    >
+                      {ord.status.replace(/_/g, ' ')}
+                    </span>
+                    <span className="inline-flex items-center gap-1 font-semibold text-xs text-[#2562eb] shrink-0">
+                      <span>Lihat Tracking</span>
+                      <ArrowRight size={14} weight="bold" />
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
             <button
               type="button"
               onClick={() => setGuestStep(1)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className={BTN_SECONDARY}
             >
               <ArrowLeft size={16} weight="bold" />
               <span>Kembali ke Beranda Layanan</span>
@@ -1283,7 +1642,7 @@ export default function PelangganTamuFlow() {
             <button
               type="button"
               onClick={() => setGuestStep(1)}
-              className="inline-flex items-center gap-2 bg-[#2562eb] hover:bg-blue-700 text-white font-bold text-xs sm:text-sm h-11 px-6 rounded-[10px] transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className={BTN_PRIMARY}
             >
               <Plus size={16} weight="bold" />
               <span>Pesan Layanan Baru</span>
@@ -1294,53 +1653,82 @@ export default function PelangganTamuFlow() {
       )}
 
       {/* =========================================================================
-          SCREEN 15: DETAIL STATUS (Phase 5)
+          SCREEN 15: DETAIL STATUS & TRACKING
       ========================================================================== */}
-      {guestStep === 15 && (
-        <div className="bg-white border border-[#dce5f0] rounded-[16px] p-6 sm:p-8 shadow-sm flex flex-col gap-6">
-          {/* Header Info */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-[#e2e8f0] gap-3">
-            <div>
-              <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">Tracking Nomor Pesanan</span>
-              <h3 className="text-2xl sm:text-3xl font-black text-[#0f2342] mt-0.5 tabular-nums">{currentOrder.id}</h3>
-              <p className="text-xs sm:text-sm text-[#64748b] mt-0.5 tabular-nums">
-                {currentOrder.serviceName} · {currentOrder.weight} {currentOrder.unit} · <strong className="text-[#0f2342]">{formatRupiah(currentOrder.total)}</strong>
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
+      {guestStep === 15 && currentOrder && (
+        <div className="bg-white border border-[#dce5f0] rounded-2xl p-4 sm:p-6 shadow-[0_1px_3px_rgba(15,35,66,0.05)] flex flex-col gap-6">
+          <StepContextHeader
+            backLabel="Daftar Pesanan"
+            onBack={() => setGuestStep(14)}
+            title={`Tracking Pesanan ${currentOrder.id}`}
+            description={`${currentOrder.serviceName} · ${currentOrder.weight} ${currentOrder.unit} · Total ${formatRupiah(currentOrder.total)}`}
+            rightBadge={
               <span
-                className={`text-xs px-3.5 py-1.5 rounded-full font-bold shadow-xs ${
-                  currentOrder.status === 'SELESAI'
-                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                    : currentOrder.status === 'DICUCI'
-                    ? 'bg-sky-100 text-sky-800 border border-sky-200'
-                    : currentOrder.status === 'DITERIMA'
-                    ? 'bg-blue-100 text-blue-800 border border-blue-200'
-                    : 'bg-amber-100 text-amber-800 border border-amber-200'
-                }`}
+                className={`text-xs px-3 py-1 rounded-full font-semibold ${getOrderStatusStyle(
+                  currentOrder.status
+                )}`}
               >
-                Status: {currentOrder.status.replace('_', ' ')}
+                {currentOrder.status.replace(/_/g, ' ')}
               </span>
+            }
+          />
+
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-3">
+            <div className="flex items-center gap-2 text-xs text-[#475569] tabular-nums">
+              <span>Kode Pesanan:</span>
+              <strong className="text-sm text-[#0f2342]">{currentOrder.id}</strong>
             </div>
+            <button
+              type="button"
+              onClick={() => handleCopy(currentOrder.id, 'order-15', 'Nomor pesanan')}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[#e2e8f0] bg-white hover:border-[#2562eb] hover:bg-[#eff6ff]/60 px-3 py-1.5 text-xs font-semibold text-[#0f2342] transition-all duration-150 ease-out cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+            >
+              {copiedKey === 'order-15' ? (
+                <>
+                  <Check size={14} weight="bold" className="text-emerald-600" />
+                  <span className="text-emerald-700">Tersalin</span>
+                </>
+              ) : (
+                <>
+                  <Copy size={14} weight="bold" className="text-[#2562eb]" />
+                  <span>Salin Kode</span>
+                </>
+              )}
+            </button>
           </div>
 
-          {/* 5-Step Progress Timeline from Figma */}
-          <div className="bg-[#f8fafc] border border-[#e2e8f0] rounded-[14px] p-6">
-            <h4 className="font-bold text-[#0f2342] text-sm mb-6 flex items-center justify-between gap-2">
-              <span>Progress Pengerjaan Laundry</span>
-              <span className="text-xs font-normal text-slate-500">Update Real-Time Kurir & Operator</span>
-            </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-5 gap-4 relative">
-              {currentOrder.steps.map((step, idx) => (
-                <div key={step.label} className="flex flex-col items-start relative">
-                  <div className="flex items-center gap-2 mb-2">
+          {/* Vertical Order Status Timeline */}
+          <div className="bg-[#f8fafc] border border-[#e2e8f0] rounded-xl p-4 sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-5">
+              <h2 className="font-bold text-[#0f2342] text-sm sm:text-base">
+                Progress Pengerjaan Laundry
+              </h2>
+              <span className="text-xs text-[#64748b] tabular-nums">
+                Estimasi Selesai: {currentOrder.estimatedFinish}
+              </span>
+            </div>
+
+            <ol className="flex flex-col">
+              {currentOrder.steps.map((step, idx) => {
+                const isLast = idx === currentOrder.steps.length - 1;
+                return (
+                  <li key={step.label} className="relative flex items-start gap-3.5">
+                    {!isLast && (
+                      <span
+                        aria-hidden="true"
+                        className={`absolute left-[15px] top-8 bottom-0 w-0.5 ${
+                          step.completed ? 'bg-emerald-500' : 'bg-[#e2e8f0]'
+                        }`}
+                      />
+                    )}
+
                     <span
-                      className={`size-7 rounded-full flex items-center justify-center text-xs font-bold ${
+                      className={`relative z-10 size-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
                         step.completed
                           ? 'bg-emerald-600 text-white'
                           : step.current
-                          ? 'bg-blue-600 text-white ring-4 ring-blue-100'
-                          : 'bg-slate-200 text-slate-500'
+                          ? 'bg-[#2562eb] text-white ring-4 ring-[#2562eb]/15'
+                          : 'bg-white border-2 border-[#cbd5e1] text-[#64748b]'
                       }`}
                     >
                       {step.completed ? (
@@ -1349,50 +1737,67 @@ export default function PelangganTamuFlow() {
                         <span className="tabular-nums">{idx + 1}</span>
                       )}
                     </span>
-                    <span
-                      className={`text-xs font-bold ${
-                        step.completed
-                          ? 'text-emerald-700'
-                          : step.current
-                          ? 'text-blue-700 font-extrabold'
-                          : 'text-slate-400'
+
+                    <div
+                      className={`flex-1 flex flex-col sm:flex-row sm:items-center justify-between gap-1 ${
+                        isLast ? 'pb-1' : 'pb-6'
                       }`}
                     >
-                      {step.label}
-                    </span>
-                  </div>
-                  <span className="text-[11px] text-[#64748b] pl-9 tabular-nums">{step.time}</span>
-                </div>
-              ))}
-            </div>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`text-sm font-semibold ${
+                            step.completed
+                              ? 'text-emerald-800'
+                              : step.current
+                              ? 'text-[#2562eb] font-bold'
+                              : 'text-[#64748b]'
+                          }`}
+                        >
+                          {step.label}
+                        </span>
+                        {step.current && (
+                          <span className="text-[11px] font-semibold bg-[#eff6ff] text-[#2562eb] border border-[#bfdbfe] px-2 py-0.5 rounded-full">
+                            Sedang Berlangsung
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-[#64748b] tabular-nums">{step.time}</span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
           </div>
 
           {/* Customer & Address Details */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs sm:text-sm">
-            <div className="p-5 rounded-xl border border-slate-200 bg-white shadow-xs">
-              <p className="font-bold text-[#0f2342] mb-1">Penerima & Kontak</p>
-              <p className="text-slate-800 font-medium">{currentOrder.customerName}</p>
-              <p className="text-slate-500 tabular-nums">{currentOrder.phone}</p>
+            <div className="p-4 sm:p-5 rounded-xl border border-[#e2e8f0] bg-[#f8fafc]">
+              <h2 className="font-bold text-[#0f2342] text-sm mb-2">Penerima & Kontak</h2>
+              <p className="text-[#0f2342] font-semibold">{currentOrder.customerName}</p>
+              <p className="text-[#475569] tabular-nums mt-0.5">{currentOrder.phone}</p>
               {currentOrder.notes && (
-                <p className="mt-2.5 text-[11px] text-amber-800 bg-amber-50 p-2 rounded-lg border border-amber-200">
+                <p className="mt-3 text-xs text-amber-800 bg-amber-50 p-2.5 rounded-lg border border-amber-200 max-w-[65ch]">
                   <strong>Catatan Khusus:</strong> {currentOrder.notes}
                 </p>
               )}
             </div>
-            <div className="p-5 rounded-xl border border-slate-200 bg-white shadow-xs">
-              <p className="font-bold text-[#0f2342] mb-1">Alamat Penjemputan</p>
-              <p className="text-slate-800">{currentOrder.address}</p>
+
+            <div className="p-4 sm:p-5 rounded-xl border border-[#e2e8f0] bg-[#f8fafc]">
+              <h2 className="font-bold text-[#0f2342] text-sm mb-2">Alamat Penjemputan</h2>
+              <p className="text-[#0f2342] leading-relaxed">{currentOrder.address}</p>
               {currentOrder.landmark && (
-                <p className="text-slate-500 text-[11px] mt-1">Patokan: {currentOrder.landmark}</p>
+                <p className="text-[#64748b] text-xs mt-1.5">
+                  Patokan: {currentOrder.landmark}
+                </p>
               )}
             </div>
           </div>
 
-          <div className="flex items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-4 border-t border-[#e2e8f0]">
             <button
               type="button"
               onClick={() => setGuestStep(14)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className={BTN_SECONDARY}
             >
               <ArrowLeft size={16} weight="bold" />
               <span>Kembali ke Daftar Pesanan</span>
@@ -1400,7 +1805,7 @@ export default function PelangganTamuFlow() {
             <button
               type="button"
               onClick={() => setGuestStep(1)}
-              className="inline-flex items-center gap-2 bg-[#2562eb] hover:bg-blue-700 text-white font-bold text-xs sm:text-sm h-11 px-6 rounded-[10px] transition shadow-sm whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30 active:scale-[0.98]"
+              className={BTN_PRIMARY}
             >
               <Plus size={16} weight="bold" />
               <span>Order Layanan Lain</span>
