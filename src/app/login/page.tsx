@@ -16,6 +16,7 @@ import {
   SignIn,
   WarningCircle,
 } from '@phosphor-icons/react';
+import BrandMark from '@/components/ui/BrandMark';
 import { useApp } from '@/context/AppContext';
 import {
   DUMMY_ACCOUNTS,
@@ -130,9 +131,7 @@ export default function LoginPage() {
           href="/dashboard"
           className="group flex items-center gap-2.5 rounded-lg transition duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30"
         >
-          <span className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#2562eb] to-sky-500 flex items-center justify-center text-white shadow-[0_1px_2px_rgba(15,35,66,0.08)] text-sm font-black shrink-0">
-            ✦
-          </span>
+          <BrandMark />
           <span className="font-bold text-base sm:text-lg text-[#0f2342] group-hover:text-[#2562eb] transition-colors duration-150 ease-out tracking-tight whitespace-nowrap">
             Iqbal Laundry
           </span>

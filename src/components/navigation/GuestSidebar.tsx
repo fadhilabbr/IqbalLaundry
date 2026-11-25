@@ -12,6 +12,7 @@ import {
   Phone,
 } from '@phosphor-icons/react';
 import { useApp } from '@/context/AppContext';
+import BrandMark from '@/components/ui/BrandMark';
 import SidebarAuthFooter from '@/components/navigation/SidebarAuthFooter';
 
 export default function GuestSidebar() {
@@ -28,9 +29,7 @@ export default function GuestSidebar() {
           href="/dashboard"
           className="group flex items-center gap-2.5 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2562eb]/30"
         >
-          <span className="w-8 h-8 rounded-lg bg-[#2562eb] flex items-center justify-center text-white text-sm font-black shrink-0">
-            ✦
-          </span>
+          <BrandMark />
           <div className="min-w-0">
             <p className="text-sm font-bold text-[#0f2342] tracking-tight group-hover:text-[#2562eb] transition-colors">
               Iqbal Laundry
